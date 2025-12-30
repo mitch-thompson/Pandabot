@@ -19,27 +19,26 @@ func TestProperty26_ServerSideCommandQueuing(t *testing.T) {
 		t.Run("PropertyTest_ServerSideCommandQueuing", func(t *testing.T) {
 			// Property: For any sequence of commands with different priorities,
 			// the server should queue them per client and process higher priority commands first
-			
+
 			config := DefaultConfig()
 			server := NewServer(config)
-			
+
 			// Create a mock client for testing
 			client := &Client{
 				conn:         &mockConn{},
 				reader:       bufio.NewReader(&mockConn{}),
 				writer:       bufio.NewWriter(&mockConn{}),
 				lastSeen:     time.Now(),
-				authenticated: true,
 				commandQueue: make([]*QueuedCommand, 0),
 			}
-			
+
 			// Generate random commands with different priorities
 			numCommands := rand.Intn(5) + 2 // 2-6 commands
 			commands := make([]struct {
 				command  string
 				priority int
 			}, numCommands)
-			
+
 			maxPriority := 0
 			for j := 0; j < numCommands; j++ {
 				priority := rand.Intn(10) + 1 // Priority 1-10
@@ -54,33 +53,33 @@ func TestProperty26_ServerSideCommandQueuing(t *testing.T) {
 					maxPriority = priority
 				}
 			}
-			
+
 			// Queue all commands
 			for _, cmd := range commands {
 				server.queueCommandForClient(client, cmd.command, "TestPlayer", cmd.priority)
 			}
-			
+
 			// Allow some time for async processing to complete
 			time.Sleep(50 * time.Millisecond)
-			
+
 			// Verify that at least one command was processed (should be the highest priority)
 			client.queueMutex.RLock()
 			totalCommands := len(client.commandQueue)
 			if client.currentCommand != nil {
 				totalCommands++ // Count the current command too
 			}
-			
+
 			// Total commands should equal what we queued
 			if totalCommands > numCommands {
 				t.Errorf("More commands than expected: got %d total, expected %d", totalCommands, numCommands)
 			}
-			
+
 			// If there's a current command, it should be the highest priority
 			if client.currentCommand != nil {
 				if client.currentCommand.State != CommandInProgress {
 					t.Errorf("Expected command state to be InProgress, got %v", client.currentCommand.State)
 				}
-				
+
 				// Check that no queued command has higher priority than current
 				for _, queuedCmd := range client.commandQueue {
 					if queuedCmd.Priority > client.currentCommand.Priority {
@@ -89,7 +88,7 @@ func TestProperty26_ServerSideCommandQueuing(t *testing.T) {
 					}
 				}
 			}
-			
+
 			// Check that remaining queued commands are sorted by priority (highest first)
 			for j := 1; j < len(client.commandQueue); j++ {
 				if client.commandQueue[j-1].Priority < client.commandQueue[j].Priority {
@@ -106,33 +105,32 @@ func TestProperty26_ServerSideCommandQueuing(t *testing.T) {
 func TestCommandTimeout(t *testing.T) {
 	config := DefaultConfig()
 	server := NewServer(config)
-	
+
 	client := &Client{
 		conn:         &mockConn{},
 		reader:       bufio.NewReader(&mockConn{}),
 		writer:       bufio.NewWriter(&mockConn{}),
 		lastSeen:     time.Now(),
-		authenticated: true,
 		commandQueue: make([]*QueuedCommand, 0),
 	}
-	
+
 	// Queue and process a command
 	server.queueCommandForClient(client, "/ma \"Cure\" \"Player1\"", "Player1", 5)
 	server.processCommandQueue(client)
-	
+
 	client.queueMutex.Lock()
 	if client.currentCommand == nil {
 		t.Fatal("Expected a command to be in progress")
 	}
-	
+
 	// Simulate timeout by setting sent time to past
 	pastTime := time.Now().Add(-35 * time.Second) // Beyond 30 second timeout
 	client.currentCommand.SentAt = &pastTime
 	client.queueMutex.Unlock()
-	
+
 	// Process queue again to trigger timeout
 	server.processCommandQueue(client)
-	
+
 	client.queueMutex.RLock()
 	// Command should be cleared due to timeout (processCommandQueue clears timed out commands)
 	if client.currentCommand != nil {
@@ -145,49 +143,58 @@ func TestCommandTimeout(t *testing.T) {
 func TestSeparateClientQueues(t *testing.T) {
 	config := DefaultConfig()
 	server := NewServer(config)
-	
+
 	client1 := &Client{
 		conn:         &mockConn{},
 		reader:       bufio.NewReader(&mockConn{}),
 		writer:       bufio.NewWriter(&mockConn{}),
 		lastSeen:     time.Now(),
-		authenticated: true,
 		commandQueue: make([]*QueuedCommand, 0),
 	}
-	
+
 	client2 := &Client{
 		conn:         &mockConn{},
 		reader:       bufio.NewReader(&mockConn{}),
 		writer:       bufio.NewWriter(&mockConn{}),
 		lastSeen:     time.Now(),
-		authenticated: true,
 		commandQueue: make([]*QueuedCommand, 0),
 	}
-	
+
 	// Queue commands for both clients
 	server.queueCommandForClient(client1, "/ma \"Cure\" \"Player1\"", "Player1", 5)
 	server.queueCommandForClient(client2, "/ma \"Protect\" \"Player2\"", "Player2", 3)
-	
+
 	// Verify queues are independent
 	client1.queueMutex.RLock()
 	client2.queueMutex.RLock()
-	
-	if len(client1.commandQueue) != 1 {
-		t.Errorf("Expected 1 command in client1 queue, got %d", len(client1.commandQueue))
+	defer client1.queueMutex.RUnlock()
+	defer client2.queueMutex.RUnlock()
+
+	// Since commands might be processed immediately, they could be in currentCommand instead of queue
+	cmd1 := ""
+	if client1.currentCommand != nil {
+		cmd1 = client1.currentCommand.Command
+	} else if len(client1.commandQueue) > 0 {
+		cmd1 = client1.commandQueue[0].Command
+	} else {
+		t.Fatal("Client1 has no command in queue or in progress")
 	}
-	if len(client2.commandQueue) != 1 {
-		t.Errorf("Expected 1 command in client2 queue, got %d", len(client2.commandQueue))
+
+	cmd2 := ""
+	if client2.currentCommand != nil {
+		cmd2 = client2.currentCommand.Command
+	} else if len(client2.commandQueue) > 0 {
+		cmd2 = client2.commandQueue[0].Command
+	} else {
+		t.Fatal("Client2 has no command in queue or in progress")
 	}
-	
-	if !strings.Contains(client1.commandQueue[0].Command, "Cure") {
-		t.Error("Client1 should have Cure command")
+
+	if !strings.Contains(cmd1, "Cure") {
+		t.Errorf("Client1 should have Cure command, got: %s", cmd1)
 	}
-	if !strings.Contains(client2.commandQueue[0].Command, "Protect") {
-		t.Error("Client2 should have Protect command")
+	if !strings.Contains(cmd2, "Protect") {
+		t.Errorf("Client2 should have Protect command, got: %s", cmd2)
 	}
-	
-	client1.queueMutex.RUnlock()
-	client2.queueMutex.RUnlock()
 }
 
 // Mock connection for testing
@@ -236,20 +243,19 @@ func TestProperty27_SpellCompletionFeedback(t *testing.T) {
 		t.Run("PropertyTest_SpellCompletionFeedback", func(t *testing.T) {
 			// Property: For any command that is sent to a client,
 			// when the client reports completion, the server should process the next queued command
-			
+
 			config := DefaultConfig()
 			server := NewServer(config)
-			
+
 			// Create a mock client for testing
 			client := &Client{
 				conn:         &mockConn{},
 				reader:       bufio.NewReader(&mockConn{}),
 				writer:       bufio.NewWriter(&mockConn{}),
 				lastSeen:     time.Now(),
-				authenticated: true,
 				commandQueue: make([]*QueuedCommand, 0),
 			}
-			
+
 			// Queue multiple commands
 			numCommands := rand.Intn(3) + 2 // 2-4 commands
 			for j := 0; j < numCommands; j++ {
@@ -257,10 +263,10 @@ func TestProperty27_SpellCompletionFeedback(t *testing.T) {
 				priority := rand.Intn(10) + 1
 				server.queueCommandForClient(client, command, "TestPlayer", priority)
 			}
-			
+
 			// Allow processing
 			time.Sleep(10 * time.Millisecond)
-			
+
 			// Should have one command in progress
 			client.queueMutex.RLock()
 			if client.currentCommand == nil {
@@ -268,11 +274,11 @@ func TestProperty27_SpellCompletionFeedback(t *testing.T) {
 				client.queueMutex.RUnlock()
 				return
 			}
-			
+
 			currentCommandID := client.currentCommand.ID
 			remainingCommands := len(client.commandQueue)
 			client.queueMutex.RUnlock()
-			
+
 			// Simulate spell completion
 			completeMsg := &protocol.Message{
 				Type: protocol.TypeSpellComplete,
@@ -281,12 +287,12 @@ func TestProperty27_SpellCompletionFeedback(t *testing.T) {
 					"timestamp":  time.Now().Unix(),
 				},
 			}
-			
+
 			server.handleJSONSpellComplete(client, completeMsg)
-			
+
 			// Allow processing
 			time.Sleep(10 * time.Millisecond)
-			
+
 			// Verify that the next command was processed (if any remaining)
 			client.queueMutex.RLock()
 			if remainingCommands > 0 {
@@ -301,10 +307,10 @@ func TestProperty27_SpellCompletionFeedback(t *testing.T) {
 						t.Errorf("Expected next command to be in progress, got %v", client.currentCommand.State)
 					}
 				}
-				
+
 				// Should have one less command in queue
 				if len(client.commandQueue) != remainingCommands-1 {
-					t.Errorf("Expected %d commands in queue after completion, got %d", 
+					t.Errorf("Expected %d commands in queue after completion, got %d",
 						remainingCommands-1, len(client.commandQueue))
 				}
 			} else {
@@ -322,30 +328,29 @@ func TestProperty27_SpellCompletionFeedback(t *testing.T) {
 func TestSpellFailureFeedback(t *testing.T) {
 	config := DefaultConfig()
 	server := NewServer(config)
-	
+
 	client := &Client{
 		conn:         &mockConn{},
 		reader:       bufio.NewReader(&mockConn{}),
 		writer:       bufio.NewWriter(&mockConn{}),
 		lastSeen:     time.Now(),
-		authenticated: true,
 		commandQueue: make([]*QueuedCommand, 0),
 	}
-	
+
 	// Queue multiple commands
 	server.queueCommandForClient(client, "/ma \"Cure\" \"Player1\"", "Player1", 5)
 	server.queueCommandForClient(client, "/ma \"Protect\" \"Player2\"", "Player2", 3)
-	
+
 	// Allow processing
 	time.Sleep(10 * time.Millisecond)
-	
+
 	client.queueMutex.RLock()
 	if client.currentCommand == nil {
 		t.Fatal("Expected a command to be in progress")
 	}
 	currentCommandID := client.currentCommand.ID
 	client.queueMutex.RUnlock()
-	
+
 	// Simulate spell failure
 	failMsg := &protocol.Message{
 		Type: protocol.TypeSpellFailed,
@@ -355,12 +360,12 @@ func TestSpellFailureFeedback(t *testing.T) {
 			"timestamp":  time.Now().Unix(),
 		},
 	}
-	
+
 	server.handleJSONSpellFailed(client, failMsg)
-	
+
 	// Allow processing
 	time.Sleep(10 * time.Millisecond)
-	
+
 	// Should process next command even after failure
 	client.queueMutex.RLock()
 	if client.currentCommand == nil {
@@ -377,10 +382,10 @@ func TestSpellFailureFeedback(t *testing.T) {
 func generateRandomCommand() string {
 	spells := []string{"Cure", "Cure II", "Cure III", "Cure IV", "Protect", "Shell", "Haste", "Regen"}
 	players := []string{"Player1", "Player2", "Player3", "TestPlayer"}
-	
+
 	spell := spells[rand.Intn(len(spells))]
 	player := players[rand.Intn(len(players))]
-	
+
 	return "/ma \"" + spell + "\" \"" + player + "\""
 }
 

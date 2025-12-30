@@ -80,12 +80,11 @@ type QueuedCommand struct {
 
 // Client represents a connected Lua addon client
 type Client struct {
-	conn          net.Conn
-	reader        *bufio.Reader
-	writer        *bufio.Writer
-	lastSeen      time.Time
-	authenticated bool
-	playerName    string // Name of the player running this client
+	conn       net.Conn
+	reader     *bufio.Reader
+	writer     *bufio.Writer
+	lastSeen   time.Time
+	playerName string // Name of the player running this client
 
 	// Command queue management
 	commandQueue   []*QueuedCommand
@@ -100,7 +99,6 @@ type Config struct {
 	ClientTimeout        time.Duration
 	MaxClients           int
 	HealthThresholds     statusMonitor.HealthThresholds
-	AuthorizedPlayers    []string
 	LogLevel             string
 }
 
@@ -136,8 +134,7 @@ func DefaultConfig() *Config {
 			Low:      50,
 			Medium:   75,
 		},
-		AuthorizedPlayers: []string{"Player1", "Player2"}, // Default authorized players
-		LogLevel:          "INFO",
+		LogLevel: "INFO",
 	}
 }
 
@@ -158,11 +155,6 @@ func (s *Server) Start() error {
 		s.config.HealthThresholds.Low,
 		s.config.HealthThresholds.Medium,
 	)
-
-	// Set authorized players
-	for _, player := range s.config.AuthorizedPlayers {
-		s.textParser.AddAuthorizedUser(player)
-	}
 
 	// Start background routines
 	go s.acceptConnections()
@@ -220,12 +212,11 @@ func (s *Server) acceptConnections() {
 		}
 
 		client := &Client{
-			conn:          conn,
-			reader:        bufio.NewReader(conn),
-			writer:        bufio.NewWriter(conn),
-			lastSeen:      time.Now(),
-			authenticated: true, // Simple auth for now
-			commandQueue:  make([]*QueuedCommand, 0),
+			conn:         conn,
+			reader:       bufio.NewReader(conn),
+			writer:       bufio.NewWriter(conn),
+			lastSeen:     time.Now(),
+			commandQueue: make([]*QueuedCommand, 0),
 		}
 
 		s.clientsMutex.Lock()
@@ -677,19 +668,15 @@ func (s *Server) handleJSONStatusUpdate(client *Client, msg *protocol.Message) {
 			// Use job levels from status update if available, otherwise use defaults
 			jobLevels := status.JobLevels
 			if jobLevels == nil || len(jobLevels) == 0 {
-				// Fallback to reasonable defaults based on your current job
-				jobLevels = map[string]int{
-					"WHM": 68, // Use your actual WHM level
-					"RDM": 37,
-					"PLD": 20,
-				}
-				log.Printf("[SERVER DEBUG] Using default job levels (no job levels in status update)")
-			} else {
-				log.Printf("[SERVER DEBUG] Using job levels from status update: %v", jobLevels)
+				log.Printf("[SERVER DEBUG] No job levels provided in status update")
+				jobLevels = make(map[string]int)
 			}
 
 			log.Printf("[SERVER DEBUG] Using actualMP=%d (was using MPPercent=%d)", actualMP, member.MPPercent)
 			s.castingSystem.UpdateClientStatus(client.conn, actualMP, jobLevels)
+
+			// Update player status and echo drop count in status monitor
+			s.statusMonitor.UpdatePlayerStatus(client.playerName, status.PlayerStatus, status.EchoDropCount)
 		}
 
 		s.statusMonitor.UpdatePartyMemberWithMaxValues(

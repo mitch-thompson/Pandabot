@@ -56,7 +56,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetPartyMember,
 			Priority: 1,
-			LevelReq: map[string]int{"WHM": 7, "RDM": 7, "PLD": 10},
+			LevelReq: map[string]int{"WHM": 7, "RDM": 7, "PLD": 10, "SCH": 10, "RUN": 20},
 		},
 		{
 			English:  "Protect II",
@@ -68,7 +68,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetPartyMember,
 			Priority: 2,
-			LevelReq: map[string]int{"WHM": 27, "RDM": 27, "PLD": 30},
+			LevelReq: map[string]int{"WHM": 27, "RDM": 27, "PLD": 30, "SCH": 30, "RUN": 40},
 		},
 		{
 			English:  "Protect III",
@@ -80,7 +80,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetPartyMember,
 			Priority: 3,
-			LevelReq: map[string]int{"WHM": 47, "RDM": 47, "PLD": 50},
+			LevelReq: map[string]int{"WHM": 47, "RDM": 47, "PLD": 50, "SCH": 50, "RUN": 60},
 		},
 		{
 			English:  "Protect IV",
@@ -92,7 +92,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetPartyMember,
 			Priority: 4,
-			LevelReq: map[string]int{"WHM": 63, "RDM": 63, "PLD": 66},
+			LevelReq: map[string]int{"WHM": 63, "RDM": 63, "PLD": 70, "SCH": 66, "RUN": 80},
 		},
 		{
 			English:  "Protect V",
@@ -104,7 +104,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetPartyMember,
 			Priority: 5,
-			LevelReq: map[string]int{"WHM": 75, "RDM": 75},
+			LevelReq: map[string]int{"WHM": 76, "RDM": 77, "PLD": 90, "SCH": 80},
 		},
 	}
 
@@ -120,7 +120,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetSelf,
 			Priority: 1,
-			LevelReq: map[string]int{"WHM": 11, "RDM": 11, "PLD": 15},
+			LevelReq: map[string]int{"WHM": 7},
 		},
 		{
 			English:  "Protectra II",
@@ -132,7 +132,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetSelf,
 			Priority: 2,
-			LevelReq: map[string]int{"WHM": 31, "RDM": 31, "PLD": 35},
+			LevelReq: map[string]int{"WHM": 27},
 		},
 		{
 			English:  "Protectra III",
@@ -144,7 +144,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetSelf,
 			Priority: 3,
-			LevelReq: map[string]int{"WHM": 47, "RDM": 47, "PLD": 55},
+			LevelReq: map[string]int{"WHM": 47},
 		},
 		{
 			English:  "Protectra IV",
@@ -156,7 +156,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetSelf,
 			Priority: 4,
-			LevelReq: map[string]int{"WHM": 67, "RDM": 67},
+			LevelReq: map[string]int{"WHM": 63},
 		},
 		{
 			English:  "Protectra V",
@@ -168,7 +168,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetSelf,
 			Priority: 5,
-			LevelReq: map[string]int{"WHM": 75, "RDM": 75},
+			LevelReq: map[string]int{"WHM": 75},
 		},
 	}
 
@@ -184,7 +184,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetPartyMember,
 			Priority: 1,
-			LevelReq: map[string]int{"WHM": 17, "RDM": 17, "PLD": 20},
+			LevelReq: map[string]int{"WHM": 17, "RDM": 17, "PLD": 20, "SCH": 20, "RUN": 10},
 		},
 		{
 			English:  "Shell II",
@@ -196,7 +196,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetPartyMember,
 			Priority: 2,
-			LevelReq: map[string]int{"WHM": 37, "RDM": 37, "PLD": 40},
+			LevelReq: map[string]int{"WHM": 37, "RDM": 37, "PLD": 40, "SCH": 40, "RUN": 30},
 		},
 		{
 			English:  "Shell III",
@@ -208,7 +208,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetPartyMember,
 			Priority: 3,
-			LevelReq: map[string]int{"WHM": 57, "RDM": 57, "PLD": 60},
+			LevelReq: map[string]int{"WHM": 57, "RDM": 57, "PLD": 60, "SCH": 60, "RUN": 50},
 		},
 		{
 			English:  "Shell IV",
@@ -220,7 +220,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetPartyMember,
 			Priority: 4,
-			LevelReq: map[string]int{"WHM": 68, "RDM": 68},
+			LevelReq: map[string]int{"WHM": 68, "RDM": 68, "PLD": 80, "SCH": 71, "RUN": 70},
 		},
 		{
 			English:  "Shell V",
@@ -232,7 +232,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetPartyMember,
 			Priority: 5,
-			LevelReq: map[string]int{"WHM": 75, "RDM": 75},
+			LevelReq: map[string]int{"WHM": 76, "RDM": 87, "SCH": 90, "RUN": 90},
 		},
 	}
 
@@ -248,7 +248,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetSelf,
 			Priority: 1,
-			LevelReq: map[string]int{"WHM": 21, "RDM": 21, "PLD": 25},
+			LevelReq: map[string]int{"WHM": 17},
 		},
 		{
 			English:  "Shellra II",
@@ -260,7 +260,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetSelf,
 			Priority: 2,
-			LevelReq: map[string]int{"WHM": 41, "RDM": 41, "PLD": 45},
+			LevelReq: map[string]int{"WHM": 37},
 		},
 		{
 			English:  "Shellra III",
@@ -272,7 +272,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetSelf,
 			Priority: 3,
-			LevelReq: map[string]int{"WHM": 61, "RDM": 61},
+			LevelReq: map[string]int{"WHM": 57},
 		},
 		{
 			English:  "Shellra IV",
@@ -284,7 +284,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetSelf,
 			Priority: 4,
-			LevelReq: map[string]int{"WHM": 68, "RDM": 68},
+			LevelReq: map[string]int{"WHM": 68},
 		},
 		{
 			English:  "Shellra V",
@@ -296,7 +296,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Light,
 			Targets:  spell.TargetSelf,
 			Priority: 5,
-			LevelReq: map[string]int{"WHM": 75, "RDM": 75},
+			LevelReq: map[string]int{"WHM": 75},
 		},
 	}
 
@@ -312,7 +312,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Ice,
 			Targets:  spell.TargetSelf, // Bar spells can only target self
 			Priority: 1,
-			LevelReq: map[string]int{"WHM": 18, "RDM": 18},
+			LevelReq: map[string]int{"WHM": 17},
 		},
 		{
 			English:  "Barblizzara",
@@ -324,7 +324,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Fire,
 			Targets:  spell.TargetSelf, // Bar spells can only target self
 			Priority: 1,
-			LevelReq: map[string]int{"WHM": 15, "RDM": 15},
+			LevelReq: map[string]int{"WHM": 21},
 		},
 		{
 			English:  "Baraera",
@@ -336,7 +336,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Earth,
 			Targets:  spell.TargetSelf, // Bar spells can only target self
 			Priority: 1,
-			LevelReq: map[string]int{"WHM": 16, "RDM": 16},
+			LevelReq: map[string]int{"WHM": 13},
 		},
 		{
 			English:  "Barstonra",
@@ -348,7 +348,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Wind,
 			Targets:  spell.TargetSelf, // Bar spells can only target self
 			Priority: 1,
-			LevelReq: map[string]int{"WHM": 19, "RDM": 19},
+			LevelReq: map[string]int{"WHM": 5},
 		},
 		{
 			English:  "Barthundra",
@@ -360,7 +360,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Water,
 			Targets:  spell.TargetSelf, // Bar spells can only target self
 			Priority: 1,
-			LevelReq: map[string]int{"WHM": 20, "RDM": 20},
+			LevelReq: map[string]int{"WHM": 25},
 		},
 		{
 			English:  "Barwatera",
@@ -372,7 +372,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			Element:  spell.Thunder,
 			Targets:  spell.TargetSelf, // Bar spells can only target self
 			Priority: 1,
-			LevelReq: map[string]int{"WHM": 17, "RDM": 17},
+			LevelReq: map[string]int{"WHM": 9},
 		},
 	}
 

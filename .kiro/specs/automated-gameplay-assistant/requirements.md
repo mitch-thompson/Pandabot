@@ -8,7 +8,7 @@ The Automated Gameplay Assistant is a system consisting of a Lua addon for Ashit
 
 - **Lua_Addon**: The client-side Ashita v4 addon that interfaces with the game using Ashita's addon framework and communicates with the Go server
 - **Go_Server**: The server-side application that processes game data, makes decisions, and sends commands back to the addon
-- **Action_Command**: A structured command sent from server to addon (e.g., "/ma \"Cure IV\" player_name")
+- **Action_Command**: A structured command sent from server to addon (e.g., "/ma \"Cure IV\" player_name" or "/item \"Echo Drop\" <me>")
 - **Status_Message**: Periodic data sent from addon to server containing party member health, MP, and status information
 - **Text_Parser**: Server component that analyzes incoming chat messages for trigger words and creates generic trigger events
 - **Casting_System**: Centralized server component that handles all spell selection, target resolution, priority management, and casting coordination
@@ -16,6 +16,8 @@ The Automated Gameplay Assistant is a system consisting of a Lua addon for Ashit
 - **Party_Member**: Any player character in the current party whose status is monitored
 - **Memory_Pointers**: Ashita v4 memory pointer system for accessing game data directly from memory
 - **Command_System**: Ashita v4 mechanism for executing game commands through the addon framework
+- **Echo_Drop**: A consumable item that removes the silence status effect from the player
+- **Silence_Status**: A negative status effect that prevents the player from casting spells
 
 ## Requirements
 
@@ -139,6 +141,18 @@ The Automated Gameplay Assistant is a system consisting of a Lua addon for Ashit
 6. WHEN the cure selector receives both actual and percentage HP/MP values, THEN it SHALL use actual values for precise calculations and fall back to percentages only when actual values are unavailable
 
 ### Requirement 10
+
+**User Story:** As a player, I want the system to prioritize using echo drops when I am silenced, so that I can regain the ability to cast spells immediately.
+
+#### Acceptance Criteria
+
+1. WHEN the player has the silence status effect, THEN the Go_Server SHALL prioritize using an echo drop above all other actions including healing and buffing
+2. WHEN the player is silenced and an echo drop is available in inventory, THEN the Go_Server SHALL immediately send an Action_Command to use the echo drop
+3. WHEN the player is silenced and no echo drop is available, THEN the Go_Server SHALL log the unavailability and continue with other priority actions
+4. WHEN the silence status effect is detected on the player, THEN the Go_Server SHALL interrupt any current casting queue to prioritize the echo drop usage
+5. WHEN an echo drop is successfully used to remove silence, THEN the Go_Server SHALL resume normal spell casting operations and update its internal status tracking
+
+### Requirement 11
 
 **User Story:** As a developer, I want the system to be fully compatible with Ashita v4, so that it works reliably with the current Ashita architecture.
 

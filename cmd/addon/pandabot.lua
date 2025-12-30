@@ -212,6 +212,7 @@ end
 local ashita_chat = AshitaCore:GetChatManager()
 local memory = AshitaCore:GetMemoryManager()
 local party = memory:GetParty()
+local bit = require('bit');
 local entity = memory:GetEntity()
 
 local sock = nil
@@ -451,89 +452,100 @@ local function hexdump(str, start, len)
 end
 
 ashita.events.register('packet_in', 'pandabot_packet', function(e)
-	-- Only log interesting packets
-	if e.id == 13 or e.id == 14 or e.id == 118 then
-		print(string.format(
-			'[PandaBot][DEBUG] packet id=%d (0x%02X) len=%d',
-			e.id, e.id, #e.data
-		))
+	if e.id ~= 0x076 then
+		return
 	end
+
+	local p = e.data
+	local plen = #p
+
+	if plen < 16 then
+		return
+	end
+
+	if config.debug_mode then
+		debug_log('Processing 0x076 packet')
+	end
+
+	-- Process up to 5 party members (indices 0-4)
+	-- Each member occupies 0x30 (48) bytes
+	for k = 0, 4 do
+	-- Calculate base offset for this member
+		local member_base = k * 0x30
+
+		-- Entity index at offset 9 + member_base
+		local entity_index_offset = 8 + 1 + member_base
+
+		if entity_index_offset + 1 > plen then
+			break
+		end
+
+		local entity_index = struct.unpack('H', p, entity_index_offset)
+
+		if entity_index == 0 or entity_index == nil then
+			goto continue
+		end
+
+		-- Get the character name using entity index
+		local char_name = entity:GetName(entity_index)
+
+		if not char_name or char_name == "" then
+			goto continue
+		end
+
+		-- Find which party member index this entity corresponds to
+		local party_member_index = nil
+		for i = 0, 17 do
+			local target_idx = party:GetMemberTargetIndex(i)
+			if target_idx == entity_index then
+				party_member_index = i
+				break
+			end
+		end
+
+		if not party_member_index then
+			goto continue
+		end
+
+		-- Extract buffs using CurePlease's method
+		local buffs = {}
+		for i = 1, 32 do
+		-- This formula extracts 10-bit buff IDs from the compressed format
+		-- Low 8 bits from one location, high 2 bits from bitmask
+			local buff_byte_offset = k * 48 + 5 + 16 + i - 1
+			local bitmask_offset = k * 48 + 5 + 8 + math.floor((i - 1) / 4)
+
+			if buff_byte_offset < plen and bitmask_offset < plen then
+				local low_bits = p:byte(buff_byte_offset)  -- REMOVED + 1
+				local bitmask_byte = p:byte(bitmask_offset)  -- REMOVED + 1
+				local high_bits = math.floor(bitmask_byte / (4 ^ ((i - 1) % 4))) % 4
+
+				local current_buff = low_bits + (high_bits * 256)
+
+				if current_buff ~= 255 and current_buff ~= 0 then
+					table.insert(buffs, current_buff)
+				end
+			end
+		end
+
+		-- Store buffs for this party member
+		party_statuses[party_member_index] = buffs
+
+		if config.debug_mode and char_name then
+		-- Show raw buff bytes before extraction
+			local raw_buff_str = ""
+			for i = 1, 32 do
+				local buff_byte_offset = k * 48 + 5 + 16 + i - 1
+				if buff_byte_offset < plen then
+					raw_buff_str = raw_buff_str .. string.format("%02X ", p:byte(buff_byte_offset + 1))
+				end
+			end
+			debug_log(string.format('Member %d raw buff bytes: %s', party_member_index, raw_buff_str))
+		end
+
+		::continue::
+end
 end)
-
---ashita.events.register('packet_in', 'pandabot_packet', function(e)
---	if e.id ~= 0x076 then
---		return
---	end
---
---	if not config.debug_mode then
---		return
---	end
---
---	local p = e.data
---	local plen = #p
---
---	print('[PandaBot][DEBUG] ================================')
---	print(string.format(
---		'[PandaBot][DEBUG] Packet 0x076 received (len=%d)',
---		plen
---	))
---
---	-- Dump first 64 bytes
---	print('[PandaBot][DEBUG] Raw bytes (0x01–0x40):')
---	print(hexdump(p, 1, 64))
---
---	-- Attempt to read party count
---	local party_count = struct.unpack('B', p, 0x05)
---	print(string.format(
---		'[PandaBot][DEBUG] Parsed party_count @0x05 = %d',
---		party_count
---	))
---
---	local offset = 0x09
---
---	for member_index = 0, math.min(party_count - 1, 5) do
---		print(string.format(
---			'[PandaBot][DEBUG] ---- Party member %d ----',
---			member_index
---		))
---
---		local buffs = {}
---
---		for i = 1, 32 do
---			if offset + 1 > plen then
---				print('[PandaBot][DEBUG] Offset exceeded packet length!')
---				break
---			end
---
---			local buff = struct.unpack('H', p, offset)
---			offset = offset + 2
---
---			if buff ~= 0 then
---				table.insert(buffs, buff)
---			end
---		end
---
---		print(string.format(
---			'[PandaBot][DEBUG] Buffs: %s',
---			(#buffs > 0) and table.concat(buffs, ', ') or 'NONE'
---		))
---	end
---
---	print('[PandaBot][DEBUG] ================================')
---end)
-
-
-
-
-
-----------------------------------------------------------------------------------------------------
--- Ashita v4 packet handler for status effects (0x076 packets)
-----------------------------------------------------------------------------------------------------
---function handle_packet_in(e)
-	-- For now, we'll use a simpler approach and rely on target-based status checking
-	-- The 0x076 packet parsing is complex and varies between different game versions
-	-- We'll implement a more reliable method using entity targeting
---end
 
 
 ----------------------------------------------------------------------------------------------------
@@ -558,26 +570,26 @@ end
 ----------------------------------------------------------------------------------------------------
 function handle_command(e)
 	local args = e.command:lower():split(' ')
-	
+
 	if args[1] ~= '/pandabot' and args[1] ~= '//pandabot' then
 		return
 	end
-	
+
 	-- Block the command from being sent to the server
 	e.blocked = true
-	
+
 	if #args < 2 then
 		print(COLOR_CYAN .. '[PandaBot] ' .. COLOR_DEFAULT .. 'Available commands:')
 		print(COLOR_CYAN .. '[PandaBot] ' .. COLOR_DEFAULT .. '  //pandabot status - Show party status and effects')
 		print(COLOR_CYAN .. '[PandaBot] ' .. COLOR_DEFAULT .. '  //pandabot debug - Toggle debug mode')
 		return
 	end
-	
+
 	local command = args[2]
-	
+
 	if command == 'status' then
 		print(COLOR_CYAN .. '[PandaBot] ' .. COLOR_DEFAULT .. 'Current party status:')
-		
+
 		for i = 0, 17 do
 			local server_id = party:GetMemberServerId(i)
 			if server_id > 0 then
@@ -585,24 +597,24 @@ function handle_command(e)
 				if member_name and member_name ~= "" then
 					local hp_percent = party:GetMemberHPPercent(i) or 0
 					local mp_percent = party:GetMemberMPPercent(i) or 0
-					local status_effects = get_party_member_status_effects(i)
-					
+					local status_effects = get_member_status_effects(i)
+
 					local status_str = "None"
 					if #status_effects > 0 then
 						status_str = table.concat(status_effects, ', ')
 					end
-					
-					print(COLOR_CYAN .. '[PandaBot] ' .. COLOR_DEFAULT .. 
-						string.format('  [%d] %s: HP=%d%%, MP=%d%%, Status=[%s]', 
+
+					print(COLOR_CYAN .. '[PandaBot] ' .. COLOR_DEFAULT ..
+						string.format('  [%d] %s: HP=%d%%, MP=%d%%, Status=[%s]',
 						i, member_name, hp_percent, mp_percent, status_str))
 				end
 			end
 		end
-		
+
 	elseif command == 'debug' then
 		config.debug_mode = not config.debug_mode
 		print(COLOR_CYAN .. '[PandaBot] ' .. COLOR_DEFAULT .. 'Debug mode: ' .. (config.debug_mode and 'ON' or 'OFF'))
-		
+
 	else
 		print(COLOR_RED .. '[PandaBot Error] ' .. COLOR_DEFAULT .. 'Unknown command: ' .. command)
 	end
@@ -645,17 +657,7 @@ function handle_chat_message(e)
 	-- Clean the message and sender of FFXI color codes before sending to server
 	local clean_message = strip_color_codes(e.message)
 	local clean_sender = strip_color_codes(e.sender or "Unknown")
-	
-	-- For party chat, sender might be embedded in the message (format: "PlayerName: message")
-	if base_mode == 12 and clean_sender == "Unknown" and clean_message then
-		local sender_from_msg, actual_message = clean_message:match("^([^:]+):%s*(.*)$")
-		if sender_from_msg and actual_message then
-			clean_sender = sender_from_msg:gsub("^%s*(.-)%s*$", "%1") -- Trim whitespace
-			clean_message = actual_message
-			debug_log('Extracted sender from party message: ' .. clean_sender)
-		end
-	end
-	
+
 	-- Capture only tell and party messages with cleaned text
 	local chat_msg = {
 		type = 20, -- TypeChatLine
@@ -667,7 +669,7 @@ function handle_chat_message(e)
 		}
 	}
 	send(chat_msg)
-	
+
 	-- Debug: Print what we're capturing (use cleaned versions)
 	debug_log('Chat captured - Mode: ' .. mode .. ', Sender: ' .. clean_sender .. ', Message: ' .. clean_message)
 end
@@ -698,7 +700,7 @@ ashita.events.register('d3d_present', 'pandabot_present', function()
 
 	-- Process command queue
 	process_command_queue()
-	
+
 	-- Process pending spells for completion tracking
 	process_pending_spells()
 end)
@@ -718,6 +720,38 @@ function get_job_name(job_id)
 	return job_names[job_id] or "UNK"
 end
 
+local function get_member_status_effects(member_index)
+	if party_statuses[member_index] and #party_statuses[member_index] > 0 then
+		return party_statuses[member_index]
+	end
+
+	local effects = {}
+	local party_mgr = AshitaCore:GetMemoryManager():GetParty()
+	if not party_mgr then
+		return effects
+	end
+
+	local icons_lo = party_mgr:GetStatusIcons(member_index)
+	local icons_hi = party_mgr:GetStatusIconsBitMask(member_index)
+
+	for j = 0, 31 do
+		local high_bits = 0
+		if j < 16 then
+			high_bits = bit.lshift(bit.band(bit.rshift(icons_hi, 2 * j), 3), 8)
+		else
+			local buffer = math.floor(icons_hi / 0xFFFFFFFF)
+			high_bits = bit.lshift(bit.band(bit.rshift(buffer, 2 * (j - 16)), 3), 8)
+		end
+
+		local buff_id = icons_lo[j + 1] + high_bits
+		if buff_id ~= 0 and buff_id ~= 255 then
+			table.insert(effects, buff_id)
+		end
+	end
+
+	return effects
+end
+
 ----------------------------------------------------------------------------------------------------
 -- Send status update using Ashita v4 APIs
 ----------------------------------------------------------------------------------------------------
@@ -727,61 +761,55 @@ function send_status_update()
 	end
 
 	local success, err = pcall(function()
+	-- In send_status_update(), replace the party_members loop with this improved version:
+
 		local party_members = {}
 
-		-- Get party member information using proper Ashita v4 MemoryManager pattern
-		for i = 0, 17 do -- Check all possible party slots (0-17)
-			-- Check if member exists and is in same zone (v4 pattern)
+		for i = 0, 17 do
 			local server_id = party:GetMemberServerId(i)
-			if server_id > 0 then
-				-- Get member name
+			if server_id and server_id > 0 then
 				local member_name = party:GetMemberName(i)
 				if member_name and member_name ~= "" then
-					-- Get HP/MP using proper v4 methods (both actual and percentage)
-					local hp_percent = party:GetMemberHPPercent(i)
-					local mp_percent = party:GetMemberMPPercent(i)
-					local hp_actual = party:GetMemberHP(i)     -- Current HP
-					local mp_actual = party:GetMemberMP(i)     -- Current MP
-					
-					local hp_max = 0
-					local mp_max = 0
-					
-					if hp_percent > 0 then
-						hp_max = math.floor(hp_actual * 100 / hp_percent + 0.5)
-					end
-					if mp_percent > 0 then
-						mp_max = math.floor(mp_actual * 100 / mp_percent + 0.5)
+					local zone = party:GetMemberZone(i) or 0
+					local player_zone = party:GetMemberZone(0) or 0
+
+					-- Skip if not in same zone (critical for clearing old trusts after zoning/dismiss)
+					if zone ~= player_zone then
+						debug_log(string.format('Skipping member %d (%s) - different zone (%d vs %d)', i, member_name, zone, player_zone))
+						goto continue
 					end
 
-
-					-- Get status effects using improved multi-method approach
-					local status_effects = get_party_member_status_effects(i)
-					
-					-- Debug logging for status effects
-					if #status_effects > 0 then
-						debug_log('Got status effects for ' .. member_name .. ': ' .. table.concat(status_effects, ', '))
-					else
-						debug_log('No status effects found for ' .. member_name)
+					local hp_percent = party:GetMemberHPPercent(i) or 0
+					if hp_percent <= 0 then
+						debug_log(string.format('Skipping member %d (%s) - HP%% <= 0', i, member_name))
+						goto continue
 					end
 
-					-- Calculate distance if needed
+					local hp_actual = party:GetMemberHP(i) or 0
+					local mp_actual = party:GetMemberMP(i) or 0
+
+					local hp_max = (hp_percent > 0) and math.floor(hp_actual * 100 / hp_percent + 0.5) or 0
+					local mp_percent = party:GetMemberMPPercent(i) or 0
+					local mp_max = (mp_percent > 0) and math.floor(mp_actual * 100 / mp_percent + 0.5) or 0
+
+					local status_effects = get_member_status_effects(i)
+
+					local main_job = party:GetMemberMainJob(i) or 0
+
 					local distance = 0
 					local target_index = party:GetMemberTargetIndex(i)
 					if target_index and target_index > 0 then
 						distance = entity:GetDistance(target_index) or 0
 					end
 
-					-- Get job information
-					local main_job = party:GetMemberMainJob(i) or 0
-					local zone = party:GetMemberZone(i) or 0
-
 					table.insert(party_members, {
 						name = member_name,
-						hp_percent = hp_percent or 0,
-						mp_percent = mp_percent or 0,
-						hp_actual = hp_actual or 0,
+						index = i,  -- optional: include slot index for debugging
+						hp_percent = hp_percent,
+						mp_percent = mp_percent,
+						hp_actual = hp_actual,
 						hp_max = hp_max,
-						mp_actual = mp_actual or 0,
+						mp_actual = mp_actual,
 						mp_max = mp_max,
 						status_effects = status_effects,
 						job = main_job,
@@ -791,37 +819,41 @@ function send_status_update()
 					})
 				end
 			end
+			::continue::
 		end
 
 		-- Get player info using v4 methods (player is always index 0)
 		local player_hp_percent = party:GetMemberHPPercent(0) or 0
 		local player_mp_percent = party:GetMemberMPPercent(0) or 0
 		local player_zone = party:GetMemberZone(0) or 0
-		
+
 		-- Get actual current HP/MP values from Ashita v4 MemoryManager
 		-- Use the player manager to get current values, not percentages
 		local party = AshitaCore:GetMemoryManager():GetParty()
 
 		local player_hp_actual = party:GetMemberHP(0)     -- Current HP (actual)
 		local player_mp_actual = party:GetMemberMP(0)     -- Current MP (actual)
-		
+
 		-- Get job levels
 		local job_levels = {}
+
 		local main_job_id = party:GetMemberMainJob(0) or 0
 		local sub_job_id = party:GetMemberSubJob(0) or 0
-		local main_job_level = party:GetMemberMainJobLevel(0) or 1
-		local sub_job_level = party:GetMemberSubJobLevel(0) or 1
-		
-		-- Convert job IDs to names and add to job_levels map
-		local main_job_name = get_job_name(main_job_id)
-		local sub_job_name = get_job_name(sub_job_id)
-		
-		if main_job_name then
-			job_levels[main_job_name] = main_job_level
-		end
-		if sub_job_name and sub_job_level > 0 then
+		local main_job_level = party:GetMemberMainJobLevel(0) or 0  -- Change to 0 if unknown
+		local sub_job_level = party:GetMemberSubJobLevel(0) or 0
+
+		local main_job_name = get_job_name(main_job_id) or "UNK"
+		local sub_job_name = get_job_name(sub_job_id) or "UNK"
+
+		-- Always include main job, even if "NONE" or "UNK"
+		job_levels[main_job_name] = main_job_level
+
+		-- Only include subjob if level > 0 (meaning it's unlocked/active)
+		if sub_job_level > 0 then
 			job_levels[sub_job_name] = sub_job_level
 		end
+
+		debug_log('Job levels built: main=' .. main_job_name .. '/' .. main_job_level .. ', sub=' .. sub_job_name .. '/' .. sub_job_level)
 
 		local status_msg = {
 			type = 21, -- TypeStatusUpdate

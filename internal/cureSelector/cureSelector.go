@@ -57,7 +57,7 @@ func (cs *CureSelector) initializeDefaultCureSpells() {
 			Targets:    spell.TargetAlly,
 			Priority:   1,
 			HealAmount: 30,
-			LevelReq:   map[string]int{"WHM": 1, "RDM": 3},
+			LevelReq:   map[string]int{"WHM": 1, "RDM": 3, "PLD": 5, "SCH": 5},
 		},
 		{
 			English:    "Cure II",
@@ -70,7 +70,7 @@ func (cs *CureSelector) initializeDefaultCureSpells() {
 			Targets:    spell.TargetAlly,
 			Priority:   2,
 			HealAmount: 160,
-			LevelReq:   map[string]int{"WHM": 11, "RDM": 26},
+			LevelReq:   map[string]int{"WHM": 11, "RDM": 14, "PLD": 17, "SCH": 17},
 		},
 		{
 			English:    "Cure III",
@@ -83,7 +83,7 @@ func (cs *CureSelector) initializeDefaultCureSpells() {
 			Targets:    spell.TargetAlly,
 			Priority:   3,
 			HealAmount: 300,
-			LevelReq:   map[string]int{"WHM": 21, "RDM": 46},
+			LevelReq:   map[string]int{"WHM": 21, "RDM": 26, "PLD": 30, "SCH": 30},
 		},
 		{
 			English:    "Cure IV",
@@ -96,7 +96,7 @@ func (cs *CureSelector) initializeDefaultCureSpells() {
 			Targets:    spell.TargetAlly,
 			Priority:   4,
 			HealAmount: 480,
-			LevelReq:   map[string]int{"WHM": 41, "RDM": 62},
+			LevelReq:   map[string]int{"WHM": 41, "RDM": 48, "PLD": 55, "SCH": 55},
 		},
 		{
 			English:    "Cure V",
@@ -122,7 +122,7 @@ func (cs *CureSelector) initializeDefaultCureSpells() {
 			Targets:    spell.TargetAlly,
 			Priority:   6,
 			HealAmount: 900,
-			LevelReq:   map[string]int{"WHM": 75},
+			LevelReq:   map[string]int{"WHM": 80},
 		},
 		// Curaga spells for AoE healing
 		{
@@ -135,8 +135,8 @@ func (cs *CureSelector) initializeDefaultCureSpells() {
 			Element:    spell.Light,
 			Targets:    spell.TargetSelf,
 			Priority:   7,
-			HealAmount: 150,
-			LevelReq:   map[string]int{"WHM": 16, "RDM": 33},
+			HealAmount: 90,
+			LevelReq:   map[string]int{"WHM": 16},
 		},
 		{
 			English:    "Curaga II",
@@ -149,7 +149,7 @@ func (cs *CureSelector) initializeDefaultCureSpells() {
 			Targets:    spell.TargetSelf,
 			Priority:   8,
 			HealAmount: 300,
-			LevelReq:   map[string]int{"WHM": 31, "RDM": 51},
+			LevelReq:   map[string]int{"WHM": 31},
 		},
 		{
 			English:    "Curaga III",
@@ -162,7 +162,7 @@ func (cs *CureSelector) initializeDefaultCureSpells() {
 			Targets:    spell.TargetSelf,
 			Priority:   9,
 			HealAmount: 450,
-			LevelReq:   map[string]int{"WHM": 51, "RDM": 69},
+			LevelReq:   map[string]int{"WHM": 51},
 		},
 		{
 			English:    "Curaga IV",
@@ -188,7 +188,7 @@ func (cs *CureSelector) initializeDefaultCureSpells() {
 			Targets:    spell.TargetSelf,
 			Priority:   11,
 			HealAmount: 850,
-			LevelReq:   map[string]int{"WHM": 75},
+			LevelReq:   map[string]int{"WHM": 91},
 		},
 	}
 
@@ -205,8 +205,8 @@ func (cs *CureSelector) initializeDefaultCureSpells() {
 	}
 }
 
-// SelectOptimalCure determines the best cure spell for a given situation
-func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, availableMP int, jobLevel map[string]int, prioritizeEfficiency bool) (*CureOption, error) {
+// SelectOptimalCure determines the best cure spell for a given situation using urgency-weighted HP/MP efficiency
+func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int, prioritizeEfficiency bool) (*CureOption, error) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -233,35 +233,83 @@ func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, availableMP int
 		return nil, fmt.Errorf("target does not need healing")
 	}
 
+	maxHP := cs.estimateMaxHP(target)
+	if maxHP <= 0 {
+		maxHP = 1000 // Fallback
+	}
+	targetUrgency := float64(missingHP) / float64(maxHP)
+
 	log.Printf("[CURE SELECTOR] Available MP: %d, Job levels: %v, Prioritize efficiency: %t",
 		availableMP, jobLevel, prioritizeEfficiency)
 
-	// Get available cure options
-	availableOptions := cs.getAvailableCureOptions(availableMP, jobLevel)
-	log.Printf("[CURE SELECTOR] Found %d available cure options", len(availableOptions))
+	// Get available single-target cure options
+	availableCureOptions := cs.getAvailableCureOptions(availableMP, jobLevel)
+	log.Printf("[CURE SELECTOR] Found %d available single-target cure options", len(availableCureOptions))
 
-	for i, option := range availableOptions {
-		log.Printf("[CURE SELECTOR] Option %d: %s (heal: %d, cost: %d MP, efficiency: %.2f)",
-			i+1, option.SpellName, option.HealAmount, option.MPCost, option.Efficiency)
+	// Get available Curaga options
+	availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel)
+	log.Printf("[CURE SELECTOR] Found %d available Curaga options", len(availableCuragaOptions))
+
+	var bestOption *CureOption
+	maxWeightedEfficiency := -1.0
+
+	// Evaluate single-target cures
+	for _, option := range availableCureOptions {
+		actualHeal := option.HealAmount
+		if actualHeal > missingHP {
+			actualHeal = missingHP
+		}
+		effectiveHeal := float64(actualHeal) * targetUrgency
+		weightedEfficiency := effectiveHeal / float64(option.MPCost)
+
+		log.Printf("[CURE SELECTOR] Evaluating single %s: effective heal %.1f, weighted efficiency %.4f",
+			option.SpellName, effectiveHeal, weightedEfficiency)
+
+		if weightedEfficiency > maxWeightedEfficiency {
+			maxWeightedEfficiency = weightedEfficiency
+			bestOption = option
+		}
 	}
 
-	if len(availableOptions) == 0 {
-		log.Printf("[CURE SELECTOR] No cure spells available with current MP and job levels")
-		return nil, fmt.Errorf("no cure spells available with current MP and job levels")
+	// Evaluate Curaga options
+	if len(partyMembers) > 0 {
+		for _, option := range availableCuragaOptions {
+			totalEffectiveHeal := 0.0
+			for _, member := range partyMembers {
+				mMissing := cs.calculateMissingHP(member)
+				if mMissing <= 0 {
+					continue
+				}
+				mMax := cs.estimateMaxHP(member)
+				if mMax <= 0 {
+					mMax = 1000
+				}
+				mUrgency := float64(mMissing) / float64(mMax)
+
+				mActualHeal := option.HealAmount
+				if mActualHeal > mMissing {
+					mActualHeal = mMissing
+				}
+				totalEffectiveHeal += float64(mActualHeal) * mUrgency
+			}
+
+			weightedEfficiency := totalEffectiveHeal / float64(option.MPCost)
+			log.Printf("[CURE SELECTOR] Evaluating Curaga %s: total effective heal %.1f, weighted efficiency %.4f",
+				option.SpellName, totalEffectiveHeal, weightedEfficiency)
+
+			if weightedEfficiency > maxWeightedEfficiency {
+				maxWeightedEfficiency = weightedEfficiency
+				bestOption = option
+			}
+		}
 	}
-
-	// Calculate effectiveness for each option
-	evaluatedOptions := cs.evaluateCureOptions(availableOptions, missingHP, prioritizeEfficiency)
-
-	// Select the best option
-	bestOption := cs.selectBestOption(evaluatedOptions, missingHP, prioritizeEfficiency)
 
 	if bestOption != nil {
-		coverage := float64(bestOption.HealAmount) / float64(missingHP) * 100
-		log.Printf("[CURE SELECTOR] Selected best option: %s (heal: %d, cost: %d MP, efficiency: %.2f, coverage: %.1f%%)",
-			bestOption.SpellName, bestOption.HealAmount, bestOption.MPCost, bestOption.Efficiency, coverage)
+		log.Printf("[CURE SELECTOR] Selected best option: %s (weighted efficiency: %.4f)",
+			bestOption.SpellName, maxWeightedEfficiency)
 	} else {
 		log.Printf("[CURE SELECTOR] No best option selected")
+		return nil, fmt.Errorf("no suitable cure option found")
 	}
 
 	return bestOption, nil
@@ -426,17 +474,79 @@ func (cs *CureSelector) ShouldUseCuraga(partyMembers []*entity.Entity, available
 
 	// Count party members needing healing
 	membersNeedingHealing := 0
+	missingHPPerMember := make([]int, 0, len(partyMembers))
 	for _, member := range partyMembers {
-		if cs.calculateMissingHP(member) > 0 {
+		missing := cs.calculateMissingHP(member)
+		if missing > 0 {
 			membersNeedingHealing++
+			missingHPPerMember = append(missingHPPerMember, missing)
 		}
 	}
 
-	// Use curaga if 3 or more members need healing
-	if membersNeedingHealing >= 3 {
-		curagaOption, err := cs.SelectCuragaForMultipleTargets(partyMembers, availableMP, jobLevel)
-		if err == nil && curagaOption != nil {
-			return true, curagaOption, nil
+	// Consider curaga if 2 or more members need healing; prioritize by MP efficiency
+	if membersNeedingHealing >= 2 {
+		// Find best curaga option available
+		availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel)
+		if len(availableCuragaOptions) == 0 {
+			return false, nil, fmt.Errorf("no curaga spells available with current MP and job levels")
+		}
+
+		// Compute an efficiency-aware best curaga for this group
+		// Use average missing HP for scoring like SelectCuragaForMultipleTargets
+		totalMissing := 0
+		for _, m := range missingHPPerMember {
+			totalMissing += m
+		}
+		averageMissing := 0
+		if membersNeedingHealing > 0 {
+			averageMissing = totalMissing / membersNeedingHealing
+		}
+
+		bestCuraga := cs.selectBestCuragaOption(availableCuragaOptions, averageMissing, membersNeedingHealing)
+		if bestCuraga == nil {
+			return false, nil, fmt.Errorf("no suitable curaga option found")
+		}
+
+		// Estimate the total MP cost to individually cure each member once with an adequate cure
+		// Adequate = cheapest cure whose HealAmount covers at least 60% of missing HP; if none, pick highest HealAmount available
+		singleOptions := cs.getAvailableCureOptions(availableMP, jobLevel)
+		if len(singleOptions) == 0 {
+			// If we can't cast any single-target cures but can cast curaga, prefer curaga
+			return true, bestCuraga, nil
+		}
+
+		estimateTotalSingles := 0
+		for _, missing := range missingHPPerMember {
+			// Choose cheapest adequate option
+			var chosen *CureOption
+			for _, opt := range singleOptions {
+				// Track best candidate under simple rules
+				if chosen == nil {
+					chosen = opt
+					continue
+				}
+				// Prefer options that meet adequacy threshold first
+				curAdequate := float64(opt.HealAmount) >= float64(missing)*0.6
+				chosenAdequate := float64(chosen.HealAmount) >= float64(missing)*0.6
+
+				if curAdequate && !chosenAdequate {
+					chosen = opt
+				} else if curAdequate == chosenAdequate {
+					// If both adequate or both not, pick lower MP cost; tie-break with higher heal
+					if opt.MPCost < chosen.MPCost || (opt.MPCost == chosen.MPCost && opt.HealAmount > chosen.HealAmount) {
+						chosen = opt
+					}
+				}
+			}
+
+			if chosen != nil {
+				estimateTotalSingles += chosen.MPCost
+			}
+		}
+
+		// Prioritize curaga only if it is cheaper or equal cost than doing singles
+		if bestCuraga.MPCost <= estimateTotalSingles {
+			return true, bestCuraga, nil
 		}
 	}
 

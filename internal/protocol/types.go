@@ -3,7 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
-	
+
 	"PandaBot/internal/job"
 )
 
@@ -27,11 +27,11 @@ type Message struct {
 
 // ExecuteCommand represents a command sent from server to client
 type ExecuteCommand struct {
-	Command  string `json:"command"`     // "/ma \"Cure IV\" <t>"
-	Target   string `json:"target"`      // Player name or <t>, <me>
-	Priority int    `json:"priority"`    // Execution priority (1-10)
-	Timeout  int    `json:"timeout"`     // Max execution time (ms)
-	ID       string `json:"id"`          // Unique command ID for tracking
+	Command  string `json:"command"`  // "/ma \"Cure IV\" <t>"
+	Target   string `json:"target"`   // Player name or <t>, <me>
+	Priority int    `json:"priority"` // Execution priority (1-10)
+	Timeout  int    `json:"timeout"`  // Max execution time (ms)
+	ID       string `json:"id"`       // Unique command ID for tracking
 }
 
 // ChatLine represents a chat message from client to server
@@ -44,12 +44,14 @@ type ChatLine struct {
 
 // StatusUpdate represents party status information from client to server
 type StatusUpdate struct {
-	Timestamp    int64         `json:"timestamp"`
-	PartyMembers []PartyMember `json:"party_members"`
-	PlayerMP     int           `json:"player_mp"`
-	PlayerHP     int           `json:"player_hp"`
-	Zone         string        `json:"zone"`
-	JobLevels    map[string]int `json:"job_levels"` // Job name -> level mapping
+	Timestamp     int64          `json:"timestamp"`
+	PartyMembers  []PartyMember  `json:"party_members"`
+	PlayerMP      int            `json:"player_mp"`
+	PlayerHP      int            `json:"player_hp"`
+	PlayerStatus  []int          `json:"player_status"` // Player's own status effects
+	EchoDropCount int            `json:"echo_drop_count"`
+	Zone          string         `json:"zone"`
+	JobLevels     map[string]int `json:"job_levels"` // Job name -> level mapping
 }
 
 // PartyMember represents a single party member's status
@@ -57,10 +59,10 @@ type PartyMember struct {
 	Name          string  `json:"name"`
 	HPPercent     int     `json:"hp_percent"`
 	MPPercent     int     `json:"mp_percent"`
-	HPActual      int     `json:"hp_actual"`      // Current HP value from Ashita v4
-	HPMax         int     `json:"hp_max"`         // Max HP value from Ashita v4
-	MPActual      int     `json:"mp_actual"`      // Current MP value from Ashita v4
-	MPMax         int     `json:"mp_max"`         // Max MP value from Ashita v4
+	HPActual      int     `json:"hp_actual"` // Current HP value from Ashita v4
+	HPMax         int     `json:"hp_max"`    // Max HP value from Ashita v4
+	MPActual      int     `json:"mp_actual"` // Current MP value from Ashita v4
+	MPMax         int     `json:"mp_max"`    // Max MP value from Ashita v4
 	StatusEffects []int   `json:"status_effects"`
 	Job           string  `json:"job"`
 	Distance      float32 `json:"distance"`
@@ -94,7 +96,7 @@ func ValidateMessage(msg *Message) error {
 	if msg == nil {
 		return fmt.Errorf("message cannot be nil")
 	}
-	
+
 	switch msg.Type {
 	case TypePing, TypePong:
 		// No body validation needed
@@ -122,19 +124,19 @@ func ValidateExecuteCommand(body any) error {
 	if !ok {
 		return fmt.Errorf("invalid ExecuteCommand body type")
 	}
-	
+
 	if cmd.Command == "" {
 		return fmt.Errorf("command cannot be empty")
 	}
-	
+
 	if cmd.Priority < 1 || cmd.Priority > 10 {
 		return fmt.Errorf("priority must be between 1 and 10, got %d", cmd.Priority)
 	}
-	
+
 	if cmd.Timeout < 0 {
 		return fmt.Errorf("timeout cannot be negative")
 	}
-	
+
 	return nil
 }
 
@@ -144,19 +146,19 @@ func ValidateChatLine(body any) error {
 	if !ok {
 		return fmt.Errorf("invalid ChatLine body type")
 	}
-	
+
 	if chat.Sender == "" {
 		return fmt.Errorf("sender cannot be empty")
 	}
-	
+
 	if chat.Message == "" {
 		return fmt.Errorf("message cannot be empty")
 	}
-	
+
 	if chat.Timestamp <= 0 {
 		return fmt.Errorf("timestamp must be positive")
 	}
-	
+
 	return nil
 }
 
@@ -166,25 +168,25 @@ func ValidateStatusUpdate(body any) error {
 	if !ok {
 		return fmt.Errorf("invalid StatusUpdate body type")
 	}
-	
+
 	if status.Timestamp <= 0 {
 		return fmt.Errorf("timestamp must be positive")
 	}
-	
+
 	if status.PlayerHP < 0 || status.PlayerHP > 100 {
 		return fmt.Errorf("player HP percent must be between 0 and 100, got %d", status.PlayerHP)
 	}
-	
+
 	if status.PlayerMP < 0 || status.PlayerMP > 100 {
 		return fmt.Errorf("player MP percent must be between 0 and 100, got %d", status.PlayerMP)
 	}
-	
+
 	for i, member := range status.PartyMembers {
 		if err := ValidatePartyMember(&member); err != nil {
 			return fmt.Errorf("party member %d validation failed: %w", i, err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -193,19 +195,19 @@ func ValidatePartyMember(member *PartyMember) error {
 	if member.Name == "" {
 		return fmt.Errorf("party member name cannot be empty")
 	}
-	
+
 	if member.HPPercent < 0 || member.HPPercent > 100 {
 		return fmt.Errorf("HP percent must be between 0 and 100, got %d", member.HPPercent)
 	}
-	
+
 	if member.MPPercent < 0 || member.MPPercent > 100 {
 		return fmt.Errorf("MP percent must be between 0 and 100, got %d", member.MPPercent)
 	}
-	
+
 	if member.Distance < 0 {
 		return fmt.Errorf("distance cannot be negative")
 	}
-	
+
 	return nil
 }
 
@@ -215,19 +217,19 @@ func ValidateErrorReport(body any) error {
 	if !ok {
 		return fmt.Errorf("invalid ErrorReport body type")
 	}
-	
+
 	if report.CommandID == "" {
 		return fmt.Errorf("command ID cannot be empty")
 	}
-	
+
 	if report.Error == "" {
 		return fmt.Errorf("error message cannot be empty")
 	}
-	
+
 	if report.Timestamp <= 0 {
 		return fmt.Errorf("timestamp must be positive")
 	}
-	
+
 	return nil
 }
 
@@ -237,15 +239,15 @@ func ValidateSpellComplete(body any) error {
 	if !ok {
 		return fmt.Errorf("invalid SpellComplete body type")
 	}
-	
+
 	if complete.CommandID == "" {
 		return fmt.Errorf("command ID cannot be empty")
 	}
-	
+
 	if complete.Timestamp <= 0 {
 		return fmt.Errorf("timestamp must be positive")
 	}
-	
+
 	return nil
 }
 
@@ -255,19 +257,19 @@ func ValidateSpellFailed(body any) error {
 	if !ok {
 		return fmt.Errorf("invalid SpellFailed body type")
 	}
-	
+
 	if failed.CommandID == "" {
 		return fmt.Errorf("command ID cannot be empty")
 	}
-	
+
 	if failed.Error == "" {
 		return fmt.Errorf("error message cannot be empty")
 	}
-	
+
 	if failed.Timestamp <= 0 {
 		return fmt.Errorf("timestamp must be positive")
 	}
-	
+
 	return nil
 }
 
@@ -328,23 +330,26 @@ type partyMemberRaw struct {
 	Name          string  `json:"name"`
 	HPPercent     int     `json:"hp_percent"`
 	MPPercent     int     `json:"mp_percent"`
-	HPActual      int     `json:"hp_actual"`      // Actual HP value from Ashita v4
-	HPMax         int     `json:"hp_max"`         // Max HP value from Ashita v4
-	MPActual      int     `json:"mp_actual"`      // Actual MP value from Ashita v4
-	MPMax         int     `json:"mp_max"`         // Max MP value from Ashita v4
+	HPActual      int     `json:"hp_actual"` // Actual HP value from Ashita v4
+	HPMax         int     `json:"hp_max"`    // Max HP value from Ashita v4
+	MPActual      int     `json:"mp_actual"` // Actual MP value from Ashita v4
+	MPMax         int     `json:"mp_max"`    // Max MP value from Ashita v4
 	StatusEffects []int   `json:"status_effects"`
-	Job           int     `json:"job"`          // Job ID from client
+	Job           int     `json:"job"` // Job ID from client
 	Distance      float32 `json:"distance"`
 	LastUpdate    int64   `json:"last_update"`
 }
 
 // statusUpdateRaw is used for unmarshaling JSON with raw party member data
 type statusUpdateRaw struct {
-	Timestamp    int64             `json:"timestamp"`
-	PartyMembers []partyMemberRaw  `json:"party_members"`
-	PlayerMP     int               `json:"player_mp"`
-	PlayerHP     int               `json:"player_hp"`
-	Zone         int               `json:"zone"` // Zone ID from client - TODO: convert to zone name
+	Timestamp     int64            `json:"timestamp"`
+	PartyMembers  []partyMemberRaw `json:"party_members"`
+	PlayerMP      int              `json:"player_mp"`
+	PlayerHP      int              `json:"player_hp"`
+	PlayerStatus  []int            `json:"player_status"`
+	EchoDropCount int              `json:"echo_drop_count"`
+	JobLevels     map[string]int   `json:"job_levels"`
+	Zone          int              `json:"zone"` // Zone ID from client - TODO: convert to zone name
 }
 
 // UnmarshalStatusUpdate deserializes a StatusUpdate from JSON
@@ -354,15 +359,18 @@ func UnmarshalStatusUpdate(data []byte) (*StatusUpdate, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Convert raw status to proper StatusUpdate with job name conversion
 	status := &StatusUpdate{
-		Timestamp: rawStatus.Timestamp,
-		PlayerMP:  rawStatus.PlayerMP,
-		PlayerHP:  rawStatus.PlayerHP,
-		Zone:      fmt.Sprintf("Zone_%d", rawStatus.Zone), // TODO: convert zone ID to zone name
+		Timestamp:     rawStatus.Timestamp,
+		PlayerMP:      rawStatus.PlayerMP,
+		PlayerHP:      rawStatus.PlayerHP,
+		PlayerStatus:  rawStatus.PlayerStatus,
+		EchoDropCount: rawStatus.EchoDropCount,
+		JobLevels:     rawStatus.JobLevels,
+		Zone:          fmt.Sprintf("Zone_%d", rawStatus.Zone), // TODO: convert zone ID to zone name
 	}
-	
+
 	// Convert party members with job ID to job name conversion
 	for _, rawMember := range rawStatus.PartyMembers {
 		member := PartyMember{
@@ -370,9 +378,9 @@ func UnmarshalStatusUpdate(data []byte) (*StatusUpdate, error) {
 			HPPercent:     rawMember.HPPercent,
 			MPPercent:     rawMember.MPPercent,
 			HPActual:      rawMember.HPActual,
-			HPMax:         rawMember.HPMax,         // Max HP from Ashita v4
+			HPMax:         rawMember.HPMax, // Max HP from Ashita v4
 			MPActual:      rawMember.MPActual,
-			MPMax:         rawMember.MPMax,         // Max MP from Ashita v4
+			MPMax:         rawMember.MPMax, // Max MP from Ashita v4
 			StatusEffects: rawMember.StatusEffects,
 			Job:           getJobName(rawMember.Job),
 			Distance:      rawMember.Distance,
@@ -380,7 +388,7 @@ func UnmarshalStatusUpdate(data []byte) (*StatusUpdate, error) {
 		}
 		status.PartyMembers = append(status.PartyMembers, member)
 	}
-	
+
 	return status, nil
 }
 

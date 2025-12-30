@@ -16,13 +16,13 @@ func TestStatusEffectToSpellMapping(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		t.Run("PropertyTest_StatusEffectToSpellMapping", func(t *testing.T) {
 			selector := NewNaSpellSelector()
-			
+
 			// Generate random status effects
 			statusEffects := generateRandomStatusEffects()
-			
+
 			// Get required spells for these status effects
 			requiredSpells, err := selector.IdentifyRequiredNaSpells(statusEffects)
-			
+
 			if len(statusEffects) == 0 {
 				// Should handle empty status effects gracefully
 				if err == nil {
@@ -30,12 +30,12 @@ func TestStatusEffectToSpellMapping(t *testing.T) {
 				}
 				return
 			}
-			
+
 			if err != nil {
 				t.Errorf("Should not error for valid status effects: %v", err)
 				return
 			}
-			
+
 			// Verify that each required spell can actually remove at least one of the status effects
 			for _, spellName := range requiredSpells {
 				spellInfo, err := selector.GetNaSpellInfo(spellName)
@@ -43,7 +43,7 @@ func TestStatusEffectToSpellMapping(t *testing.T) {
 					t.Errorf("Required spell %s not found in database", spellName)
 					continue
 				}
-				
+
 				// Check that this spell can remove at least one of the input status effects
 				canRemove := false
 				for _, effectID := range statusEffects {
@@ -57,19 +57,19 @@ func TestStatusEffectToSpellMapping(t *testing.T) {
 						break
 					}
 				}
-				
+
 				if !canRemove {
 					t.Errorf("Spell %s was recommended but cannot remove any of the status effects %v", spellName, statusEffects)
 				}
 			}
-			
+
 			// Verify that known status effects map to correct spells
 			for _, effectID := range statusEffects {
 				effectInfo, err := selector.GetStatusEffectInfo(effectID)
 				if err != nil {
 					continue // Unknown status effect, skip
 				}
-				
+
 				if effectInfo.NaSpell != "" {
 					// This status effect should have a corresponding spell in the required list
 					found := false
@@ -79,9 +79,9 @@ func TestStatusEffectToSpellMapping(t *testing.T) {
 							break
 						}
 					}
-					
+
 					if !found {
-						t.Errorf("Status effect %d (%s) requires spell %s but it was not in required spells list", 
+						t.Errorf("Status effect %d (%s) requires spell %s but it was not in required spells list",
 							effectID, effectInfo.Name, effectInfo.NaSpell)
 					}
 				}
@@ -99,46 +99,46 @@ func TestStatusEffectPrioritization(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		t.Run("PropertyTest_StatusEffectPrioritization", func(t *testing.T) {
 			selector := NewNaSpellSelector()
-			
+
 			// Generate multiple status effects with known severities
 			statusEffects := []int{3, 7, 5, 20} // Poison(5), Petrification(9), Blindness(4), Doom(10)
-			
+
 			prioritizedEffects, err := selector.PrioritizeStatusEffects(statusEffects)
 			if err != nil {
 				t.Errorf("Should not error for valid status effects: %v", err)
 				return
 			}
-			
+
 			if len(prioritizedEffects) != len(statusEffects) {
-				t.Errorf("Prioritized list should have same length as input: got %d, expected %d", 
+				t.Errorf("Prioritized list should have same length as input: got %d, expected %d",
 					len(prioritizedEffects), len(statusEffects))
 				return
 			}
-			
+
 			// Verify that effects are sorted by severity (highest first)
 			for i := 0; i < len(prioritizedEffects)-1; i++ {
 				currentEffect, err1 := selector.GetStatusEffectInfo(prioritizedEffects[i])
 				nextEffect, err2 := selector.GetStatusEffectInfo(prioritizedEffects[i+1])
-				
+
 				if err1 != nil || err2 != nil {
 					continue // Skip unknown effects
 				}
-				
+
 				if currentEffect.Severity < nextEffect.Severity {
 					t.Errorf("Status effects not properly prioritized: %s (severity %d) should come after %s (severity %d)",
 						currentEffect.Name, currentEffect.Severity, nextEffect.Name, nextEffect.Severity)
 				}
 			}
-			
+
 			// Verify that life-threatening conditions (severity >= 8) come before minor debuffs (severity < 5)
 			var highSeverityIndex, lowSeverityIndex int = -1, -1
-			
+
 			for i, effectID := range prioritizedEffects {
 				effect, err := selector.GetStatusEffectInfo(effectID)
 				if err != nil {
 					continue
 				}
-				
+
 				if effect.Severity >= 8 && highSeverityIndex == -1 {
 					highSeverityIndex = i
 				}
@@ -146,7 +146,7 @@ func TestStatusEffectPrioritization(t *testing.T) {
 					lowSeverityIndex = i
 				}
 			}
-			
+
 			if highSeverityIndex != -1 && lowSeverityIndex != -1 && highSeverityIndex > lowSeverityIndex {
 				t.Error("Life-threatening conditions should be prioritized over minor debuffs")
 			}
@@ -163,24 +163,24 @@ func TestStatusRemovalCommandGeneration(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		t.Run("PropertyTest_StatusRemovalCommandGeneration", func(t *testing.T) {
 			selector := NewNaSpellSelector()
-			
+
 			// Generate random status effects and MP amount
 			statusEffects := generateKnownStatusEffects() // Use known effects for this test
-			availableMP := rand.Intn(200) + 50 // 50-250 MP
-			
+			availableMP := rand.Intn(200) + 50            // 50-250 MP
+
 			if len(statusEffects) == 0 {
 				return // Skip if no status effects
 			}
-			
+
 			optimalSpell, err := selector.SelectOptimalNaSpell(statusEffects, availableMP)
-			
+
 			// Should either find a spell or return appropriate error
 			if err != nil {
 				// Error is acceptable if no spells are affordable or applicable
 				if availableMP < 8 { // Minimum MP for cheapest spell
 					return // Expected - not enough MP
 				}
-				
+
 				// Check if any spells should be applicable
 				hasRemovableEffect := false
 				for _, effectID := range statusEffects {
@@ -193,24 +193,24 @@ func TestStatusRemovalCommandGeneration(t *testing.T) {
 						}
 					}
 				}
-				
+
 				if hasRemovableEffect {
 					t.Errorf("Should find applicable spell but got error: %v", err)
 				}
 				return
 			}
-			
+
 			// If we got a spell, verify it's correct
 			if optimalSpell == nil {
 				t.Error("Should return spell or error, not nil")
 				return
 			}
-			
+
 			// Verify the spell can afford with available MP
 			if optimalSpell.MPCost > availableMP {
 				t.Errorf("Selected spell costs %d MP but only have %d MP", optimalSpell.MPCost, availableMP)
 			}
-			
+
 			// Verify the spell can remove at least one of the status effects
 			canRemove := false
 			for _, effectID := range statusEffects {
@@ -224,9 +224,9 @@ func TestStatusRemovalCommandGeneration(t *testing.T) {
 					break
 				}
 			}
-			
+
 			if !canRemove {
-				t.Errorf("Selected spell %s cannot remove any of the status effects %v", 
+				t.Errorf("Selected spell %s cannot remove any of the status effects %v",
 					optimalSpell.SpellName, statusEffects)
 			}
 		})
@@ -242,26 +242,26 @@ func TestActionQueuingForUnavailableResources(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		t.Run("PropertyTest_ActionQueuingForUnavailableResources", func(t *testing.T) {
 			selector := NewNaSpellSelector()
-			
+
 			// Test with insufficient MP
-			statusEffects := []int{7} // Petrification (requires Stona, 15 MP)
+			statusEffects := []int{7}  // Petrification (requires Stona, 15 MP)
 			lowMP := rand.Intn(10) + 1 // 1-10 MP (insufficient)
-			
+
 			_, err := selector.SelectOptimalNaSpell(statusEffects, lowMP)
-			
+
 			// Should return error indicating insufficient resources
 			if err == nil {
 				t.Error("Should return error when MP is insufficient for any applicable spells")
 			}
-			
+
 			// Test with sufficient MP
 			highMP := rand.Intn(100) + 50 // 50-150 MP (sufficient)
 			spell, err := selector.SelectOptimalNaSpell(statusEffects, highMP)
-			
+
 			if err != nil {
 				t.Errorf("Should find spell with sufficient MP: %v", err)
 			}
-			
+
 			if spell != nil && spell.MPCost > highMP {
 				t.Errorf("Selected spell should be affordable: costs %d, have %d", spell.MPCost, highMP)
 			}
@@ -278,44 +278,44 @@ func TestStateTrackingAfterStatusRemoval(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		t.Run("PropertyTest_StateTrackingAfterStatusRemoval", func(t *testing.T) {
 			selector := NewNaSpellSelector()
-			
+
 			// Create a mock party member with status effects
 			member := generateRandomPartyMember()
 			availableMP := rand.Intn(200) + 100 // 100-300 MP
-			
+
 			// Get recommended spells before "removal"
 			recommendedBefore, err := selector.AnalyzePartyMemberStatus(member, availableMP)
 			if err != nil {
 				return // Skip if analysis fails
 			}
-			
+
 			if len(recommendedBefore) == 0 {
 				return // Skip if no spells recommended
 			}
-			
+
 			// Simulate status removal by removing some buffs
 			originalBuffs := make([]uint16, len(member.Buffs))
 			copy(originalBuffs, member.Buffs[:])
-			
+
 			// Remove first status effect
 			if len(member.Buffs) > 0 && member.Buffs[0] > 0 {
 				member.Buffs[0] = 0
 			}
-			
+
 			// Get recommended spells after "removal"
 			recommendedAfter, err := selector.AnalyzePartyMemberStatus(member, availableMP)
 			if err != nil {
 				t.Errorf("Analysis should not fail after status removal: %v", err)
 				return
 			}
-			
+
 			// The number of recommended spells should be less than or equal to before
 			// (since we removed a status effect)
 			if len(recommendedAfter) > len(recommendedBefore) {
 				t.Errorf("Should not recommend more spells after status removal: before=%d, after=%d",
 					len(recommendedBefore), len(recommendedAfter))
 			}
-			
+
 			// Verify that the analysis correctly reflects the updated state
 			hasActiveEffects := false
 			for _, buffID := range member.Buffs {
@@ -324,7 +324,7 @@ func TestStateTrackingAfterStatusRemoval(t *testing.T) {
 					break
 				}
 			}
-			
+
 			if !hasActiveEffects && len(recommendedAfter) > 0 {
 				t.Error("Should not recommend spells when no status effects are present")
 			}
@@ -334,31 +334,62 @@ func TestStateTrackingAfterStatusRemoval(t *testing.T) {
 
 // Generator functions for property-based testing
 
+func TestDEXDownMapping(t *testing.T) {
+	selector := NewNaSpellSelector()
+	statusEffects := []int{137} // DEX Down
+
+	requiredSpells, err := selector.IdentifyRequiredNaSpells(statusEffects)
+	if err != nil {
+		t.Fatalf("Failed to identify required spells: %v", err)
+	}
+
+	found := false
+	for _, spell := range requiredSpells {
+		if spell == "Erase" {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Errorf("DEX Down (137) should require Erase, but it was not found in %v", requiredSpells)
+	}
+
+	optimal, err := selector.SelectOptimalNaSpell(statusEffects, 100)
+	if err != nil {
+		t.Fatalf("Failed to select optimal spell: %v", err)
+	}
+
+	if optimal == nil || optimal.SpellName != "Erase" {
+		t.Errorf("Expected Erase as optimal spell for DEX Down, got %v", optimal)
+	}
+}
+
 func generateRandomStatusEffects() []int {
 	count := rand.Intn(5) // 0-4 status effects
 	effects := make([]int, count)
-	
+
 	// Known status effect IDs
-	knownEffects := []int{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 20}
-	
+	knownEffects := []int{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 136, 137, 138, 139, 140, 141, 142, 146, 147, 20, 21}
+
 	for i := 0; i < count; i++ {
 		effects[i] = knownEffects[rand.Intn(len(knownEffects))]
 	}
-	
+
 	return effects
 }
 
 func generateKnownStatusEffects() []int {
 	// Only generate status effects that have corresponding "na" spells
 	removableEffects := []int{3, 4, 5, 6, 7, 8, 9, 20} // Poison, Paralysis, Blindness, Silence, Petrification, Disease, Curse, Doom
-	
+
 	count := rand.Intn(3) + 1 // 1-3 effects
 	effects := make([]int, count)
-	
+
 	for i := 0; i < count; i++ {
 		effects[i] = removableEffects[rand.Intn(len(removableEffects))]
 	}
-	
+
 	return effects
 }
 
@@ -369,14 +400,14 @@ func generateRandomPartyMember() *entity.Entity {
 		MPPercent: uint8(rand.Intn(100) + 1),
 		Job:       generateRandomJob(),
 	}
-	
+
 	// Add some random status effects
 	effectCount := rand.Intn(4) // 0-3 status effects
 	for i := 0; i < effectCount && i < len(member.Buffs); i++ {
 		knownEffects := []uint16{3, 4, 5, 6, 7, 8, 9, 20}
 		member.Buffs[i] = knownEffects[rand.Intn(len(knownEffects))]
 	}
-	
+
 	return member
 }
 

@@ -12,24 +12,27 @@ type StatusMonitor struct {
 	statusEffects    map[int]StatusEffectInfo
 	lastUpdate       time.Time
 	updateInterval   time.Duration
+	PlayerName       string
+	PlayerStatus     []int
+	EchoDropCount    int
 }
 
 // PartyMember represents a party member's current state
 type PartyMember struct {
-	Name         string
-	HPPercent    int
-	MPPercent    int
-	HPActual     int // Actual HP value from Ashita v4
-	MPActual     int // Actual MP value from Ashita v4
-	HPMax        int // Max HP value from Ashita v4
-	MPMax        int // Max MP value from Ashita v4
-	Job          int
-	Zone         int
-	StatusIDs    []int
-	LastSeen     time.Time
-	NeedsHealing bool
+	Name               string
+	HPPercent          int
+	MPPercent          int
+	HPActual           int // Actual HP value from Ashita v4
+	MPActual           int // Actual MP value from Ashita v4
+	HPMax              int // Max HP value from Ashita v4
+	MPMax              int // Max MP value from Ashita v4
+	Job                int
+	Zone               int
+	StatusIDs          []int
+	LastSeen           time.Time
+	NeedsHealing       bool
 	NeedsStatusRemoval bool
-	Priority     int // Higher number = higher priority
+	Priority           int // Higher number = higher priority
 }
 
 // HealthThresholds defines when healing is needed
@@ -43,13 +46,13 @@ type HealthThresholds struct {
 type StatusEffectInfo struct {
 	ID       int
 	Name     string
-	Severity int // 1=minor, 2=moderate, 3=severe, 4=critical
+	Severity int    // 1=minor, 2=moderate, 3=severe, 4=critical
 	SpellID  string // The "na" spell to cure it
 }
 
 // ActionTrigger represents a triggered action
 type ActionTrigger struct {
-	Type     string // "cure", "na_spell", "buff"
+	Type     string // "cure", "na_spell", "buff", "echo_drop"
 	Target   string
 	Spell    string
 	Priority int
@@ -65,8 +68,9 @@ func NewStatusMonitor() *StatusMonitor {
 			Low:      50,
 			Medium:   75,
 		},
-		statusEffects: getDefaultStatusEffects(),
+		statusEffects:  getDefaultStatusEffects(),
 		updateInterval: 5 * time.Second,
+		PlayerStatus:   make([]int, 0),
 	}
 }
 
@@ -102,12 +106,12 @@ func (sm *StatusMonitor) UpdatePartyMemberWithMaxValues(name string, hpPercent, 
 	member, exists := sm.partyMembers[name]
 	if !exists {
 		member = &PartyMember{
-			Name: name,
+			Name:     name,
 			Priority: sm.calculateMemberPriority(job),
 		}
 		sm.partyMembers[name] = member
 	}
-	
+
 	member.HPPercent = hpPercent
 	member.MPPercent = mpPercent
 	member.HPActual = hpActual
@@ -118,15 +122,21 @@ func (sm *StatusMonitor) UpdatePartyMemberWithMaxValues(name string, hpPercent, 
 	member.Zone = zone
 	member.StatusIDs = statusIDs
 	member.LastSeen = time.Now()
-	
+
 	// Update needs flags
 	member.NeedsHealing = sm.needsHealing(member)
 	member.NeedsStatusRemoval = sm.needsStatusRemoval(member)
-	
+
 	sm.lastUpdate = time.Now()
 }
 
 // calculateMemberPriority determines priority based on job
+func (sm *StatusMonitor) UpdatePlayerStatus(playerName string, statusIDs []int, echoDropCount int) {
+	sm.PlayerName = playerName
+	sm.PlayerStatus = statusIDs
+	sm.EchoDropCount = echoDropCount
+}
+
 func (sm *StatusMonitor) calculateMemberPriority(job int) int {
 	// Job priority mapping (higher = more important)
 	jobPriorities := map[int]int{
@@ -153,7 +163,7 @@ func (sm *StatusMonitor) calculateMemberPriority(job int) int {
 		21: 6, // GEO (Geomancer)
 		22: 6, // RUN (Runic Knight)
 	}
-	
+
 	if priority, exists := jobPriorities[job]; exists {
 		return priority
 	}
@@ -193,7 +203,7 @@ func (sm *StatusMonitor) GetHealthThreshold(hpPercent int) string {
 func (sm *StatusMonitor) GetMostSevereStatusEffect(member *PartyMember) *StatusEffectInfo {
 	var mostSevere *StatusEffectInfo
 	maxSeverity := 0
-	
+
 	for _, statusID := range member.StatusIDs {
 		if effect, exists := sm.statusEffects[statusID]; exists {
 			if effect.Severity > maxSeverity {
@@ -202,20 +212,36 @@ func (sm *StatusMonitor) GetMostSevereStatusEffect(member *PartyMember) *StatusE
 			}
 		}
 	}
-	
+
 	return mostSevere
 }
 
 // CheckForActions analyzes current party state and returns triggered actions
 func (sm *StatusMonitor) CheckForActions() []ActionTrigger {
 	var actions []ActionTrigger
-	
+
+	// Check for silence (echo drop) first - highest priority (Requirement 10.1)
+	for _, statusID := range sm.PlayerStatus {
+		if statusID == 6 { // Silence
+			if sm.EchoDropCount > 0 {
+				actions = append(actions, ActionTrigger{
+					Type:     "echo_drop",
+					Target:   "<me>",
+					Spell:    "Echo Drop",
+					Priority: 10,
+					Reason:   "Silenced",
+				})
+			}
+			break
+		}
+	}
+
 	for _, member := range sm.partyMembers {
 		// Check for healing needs
 		if member.NeedsHealing {
 			threshold := sm.GetHealthThreshold(member.HPPercent)
 			priority := sm.calculateHealingPriority(member, threshold)
-			
+
 			action := ActionTrigger{
 				Type:     "cure",
 				Target:   member.Name,
@@ -224,13 +250,13 @@ func (sm *StatusMonitor) CheckForActions() []ActionTrigger {
 			}
 			actions = append(actions, action)
 		}
-		
+
 		// Check for status removal needs
 		if member.NeedsStatusRemoval {
 			effect := sm.GetMostSevereStatusEffect(member)
 			if effect != nil {
 				priority := sm.calculateStatusRemovalPriority(member, effect)
-				
+
 				action := ActionTrigger{
 					Type:     "na_spell",
 					Target:   member.Name,
@@ -242,14 +268,14 @@ func (sm *StatusMonitor) CheckForActions() []ActionTrigger {
 			}
 		}
 	}
-	
+
 	return actions
 }
 
 // calculateHealingPriority determines healing priority
 func (sm *StatusMonitor) calculateHealingPriority(member *PartyMember, threshold string) int {
 	basePriority := member.Priority
-	
+
 	switch threshold {
 	case "critical":
 		return basePriority + 100 // Highest priority
@@ -266,7 +292,7 @@ func (sm *StatusMonitor) calculateHealingPriority(member *PartyMember, threshold
 func (sm *StatusMonitor) calculateStatusRemovalPriority(member *PartyMember, effect *StatusEffectInfo) int {
 	basePriority := member.Priority
 	severityBonus := effect.Severity * 15
-	
+
 	return basePriority + severityBonus
 }
 
@@ -290,14 +316,14 @@ func (sm *StatusMonitor) RemovePartyMember(name string) {
 func (sm *StatusMonitor) CleanupStaleMembers(maxAge time.Duration) int {
 	removed := 0
 	cutoff := time.Now().Add(-maxAge)
-	
+
 	for name, member := range sm.partyMembers {
 		if member.LastSeen.Before(cutoff) {
 			delete(sm.partyMembers, name)
 			removed++
 		}
 	}
-	
+
 	return removed
 }
 

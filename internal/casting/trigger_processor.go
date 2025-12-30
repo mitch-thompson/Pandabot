@@ -9,13 +9,17 @@ import (
 	"PandaBot/internal/entity"
 )
 
+type Engine interface {
+	RequestCast(request *CastRequest) error
+}
+
 // TriggerProcessor handles processing of trigger events and converts them to casting requests
 type TriggerProcessor struct {
-	engine *CastingEngine
+	engine Engine
 }
 
 // NewTriggerProcessor creates a new trigger processor
-func NewTriggerProcessor(engine *CastingEngine) *TriggerProcessor {
+func NewTriggerProcessor(engine Engine) *TriggerProcessor {
 	return &TriggerProcessor{
 		engine: engine,
 	}
@@ -24,7 +28,7 @@ func NewTriggerProcessor(engine *CastingEngine) *TriggerProcessor {
 // ProcessTriggerEvent processes a trigger event and generates appropriate casting requests
 func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender string, priority int, casterName string, casterMP int, casterJobLevels map[string]int, partyMembers []*entity.Entity) ([]string, error) {
 	var requestIDs []string
-	
+
 	// Create casting context
 	context := &CastContext{
 		CasterMP:        casterMP,
@@ -33,7 +37,7 @@ func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender strin
 		PartyMembers:    partyMembers,
 		PartySize:       len(partyMembers),
 	}
-	
+
 	switch {
 	// Status removal triggers
 	case triggerType == "stoned":
@@ -42,35 +46,42 @@ func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender strin
 			return nil, fmt.Errorf("failed to process stoned trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
-		
+
 	case triggerType == "paralyzed":
 		requestID, err := tp.processNaTrigger("Paralyna", sender, priority, context)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process paralyzed trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
-		
+
 	case triggerType == "silenced":
 		requestID, err := tp.processNaTrigger("Silena", sender, priority, context)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process silenced trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
-		
+
 	case triggerType == "poisoned":
 		requestID, err := tp.processNaTrigger("Poisona", sender, priority, context)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process poisoned trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
-		
+
 	case triggerType == "blinded":
 		requestID, err := tp.processNaTrigger("Blindna", sender, priority, context)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process blinded trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
-		
+
+	case triggerType == "erase":
+		requestID, err := tp.processNaTrigger("Erase", sender, priority, context)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process erase trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
 	// Healing triggers
 	case triggerType == "heal" || triggerType == "cure" || triggerType == "help":
 		requestID, err := tp.processCureTrigger(sender, priority, context)
@@ -78,7 +89,21 @@ func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender strin
 			return nil, fmt.Errorf("failed to process heal trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
-		
+
+	case triggerType == "protect":
+		requestID, err := tp.processProtectTrigger(sender, priority, context)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process protect trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "shell":
+		requestID, err := tp.processShellTrigger(sender, priority, context)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process shell trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
 	// Buff triggers - these target the caster, not the sender
 	case strings.HasSuffix(triggerType, "buffs"):
 		buffType := triggerType // firebuffs, waterbuffs, etc.
@@ -87,11 +112,11 @@ func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender strin
 			return nil, fmt.Errorf("failed to process buff trigger %s: %v", buffType, err)
 		}
 		requestIDs = append(requestIDs, requestID)
-		
+
 	default:
 		return nil, fmt.Errorf("unknown trigger type: %s", triggerType)
 	}
-	
+
 	return requestIDs, nil
 }
 
@@ -105,16 +130,16 @@ func (tp *TriggerProcessor) processNaTrigger(spellName string, target string, pr
 			break
 		}
 	}
-	
+
 	if targetEntity == nil {
 		// If we can't find the entity, still try to cast the specific spell
 		log.Printf("Target entity %s not found, casting %s anyway", target, spellName)
 		return tp.castManualSpell(spellName, target, priority, context)
 	}
-	
+
 	// Update context with target information
 	context.TargetEntity = targetEntity
-	
+
 	// Convert Buffs array to status effects slice
 	var statusEffects []int
 	for _, buffID := range targetEntity.Buffs {
@@ -123,30 +148,30 @@ func (tp *TriggerProcessor) processNaTrigger(spellName string, target string, pr
 		}
 	}
 	context.StatusEffects = statusEffects
-	
+
 	// Create casting request for na spell
 	requestID := fmt.Sprintf("na_%d", time.Now().UnixNano())
 	request := &CastRequest{
-		ID:       requestID,
-		Type:     CastTypeManual, // Use manual type with specific spell
+		ID:        requestID,
+		Type:      CastTypeManual, // Use manual type with specific spell
 		SpellName: spellName,
-		Target:   target,
-		Priority: priority,
-		Context:  context,
+		Target:    target,
+		Priority:  priority,
+		Context:   context,
 	}
-	
+
 	err := tp.engine.RequestCast(request)
 	if err != nil {
 		return "", fmt.Errorf("failed to request na spell cast: %v", err)
 	}
-	
+
 	return requestID, nil
 }
 
 // processCureTrigger processes a healing trigger
 func (tp *TriggerProcessor) processCureTrigger(target string, priority int, context *CastContext) (string, error) {
 	log.Printf("[TRIGGER DEBUG] Processing cure trigger for target: %s, priority: %d", target, priority)
-	
+
 	// Find the target entity to determine cure needs
 	var targetEntity *entity.Entity
 	for _, member := range context.PartyMembers {
@@ -155,39 +180,39 @@ func (tp *TriggerProcessor) processCureTrigger(target string, priority int, cont
 			break
 		}
 	}
-	
+
 	if targetEntity == nil {
 		// If we can't find the entity, cast a basic cure
 		log.Printf("[TRIGGER DEBUG] Target entity %s not found, casting basic Cure", target)
 		return tp.castManualSpell("Cure", target, priority, context)
 	}
-	
-	log.Printf("[TRIGGER DEBUG] Found target entity: %s, HP: %d/%d (%d%%), Job: %s Level: %d", 
-		targetEntity.Name, targetEntity.HPcurrent, targetEntity.HPMax, targetEntity.HPPercent, 
+
+	log.Printf("[TRIGGER DEBUG] Found target entity: %s, HP: %d/%d (%d%%), Job: %s Level: %d",
+		targetEntity.Name, targetEntity.HPcurrent, targetEntity.HPMax, targetEntity.HPPercent,
 		targetEntity.Job, targetEntity.JobLevel)
-	
+
 	// Update context with target information
 	context.TargetEntity = targetEntity
-	
+
 	// Calculate actual missing HP using both actual values and percentage fallback
 	var missingHP int
 	var calculationMethod string
-	
+
 	if targetEntity.HPMax > 0 && targetEntity.HPcurrent <= targetEntity.HPMax {
 		// Use actual HP values when available (preferred)
 		missingHP = int(targetEntity.HPMax - targetEntity.HPcurrent)
 		calculationMethod = "actual_values"
-		log.Printf("[TRIGGER DEBUG] Using actual HP values: %d - %d = %d missing HP", 
+		log.Printf("[TRIGGER DEBUG] Using actual HP values: %d - %d = %d missing HP",
 			targetEntity.HPMax, targetEntity.HPcurrent, missingHP)
 	} else {
 		// Fallback to percentage-based calculation with realistic HP estimate
 		missingPercent := 100 - int(targetEntity.HPPercent)
 		estimatedMaxHP := 1000 // Default estimate
 		calculationMethod = "percentage_estimate"
-		
-		log.Printf("[TRIGGER DEBUG] Actual HP values not available, using percentage: %d%% HP, missing %d%%", 
+
+		log.Printf("[TRIGGER DEBUG] Actual HP values not available, using percentage: %d%% HP, missing %d%%",
 			targetEntity.HPPercent, missingPercent)
-		
+
 		// Better HP estimate based on job level if available
 		if targetEntity.JobLevel > 0 {
 			baseHP := 500 + (int(targetEntity.JobLevel) * 18)
@@ -199,7 +224,7 @@ func (tp *TriggerProcessor) processCureTrigger(target string, priority int, cont
 			default:
 				estimatedMaxHP = baseHP
 			}
-			
+
 			// Reasonable bounds
 			if estimatedMaxHP < 200 {
 				estimatedMaxHP = 200
@@ -207,19 +232,19 @@ func (tp *TriggerProcessor) processCureTrigger(target string, priority int, cont
 			if estimatedMaxHP > 2000 {
 				estimatedMaxHP = 2000
 			}
-			
-			log.Printf("[TRIGGER DEBUG] Estimated max HP for %s %d: %d (base: %d)", 
+
+			log.Printf("[TRIGGER DEBUG] Estimated max HP for %s %d: %d (base: %d)",
 				targetEntity.Job, targetEntity.JobLevel, estimatedMaxHP, baseHP)
 		}
-		
+
 		missingHP = (missingPercent * estimatedMaxHP) / 100
-		log.Printf("[TRIGGER DEBUG] Calculated missing HP: (%d%% * %d) / 100 = %d", 
+		log.Printf("[TRIGGER DEBUG] Calculated missing HP: (%d%% * %d) / 100 = %d",
 			missingPercent, estimatedMaxHP, missingHP)
 	}
-	
+
 	context.MissingHP = missingHP
 	log.Printf("[TRIGGER DEBUG] Final missing HP calculation: %d (method: %s)", missingHP, calculationMethod)
-	
+
 	// Create casting request for cure spell (let engine select optimal cure)
 	requestID := fmt.Sprintf("cure_%d", time.Now().UnixNano())
 	request := &CastRequest{
@@ -229,12 +254,12 @@ func (tp *TriggerProcessor) processCureTrigger(target string, priority int, cont
 		Priority: priority,
 		Context:  context,
 	}
-	
+
 	err := tp.engine.RequestCast(request)
 	if err != nil {
 		return "", fmt.Errorf("failed to request cure cast: %v", err)
 	}
-	
+
 	return requestID, nil
 }
 
@@ -242,31 +267,31 @@ func (tp *TriggerProcessor) processCureTrigger(target string, priority int, cont
 func (tp *TriggerProcessor) processBuffTrigger(buffType string, target string, priority int, context *CastContext) (string, error) {
 	// Update context with buff information
 	context.BuffType = buffType
-	
-	log.Printf("[TRIGGER DEBUG] processBuffTrigger: buffType=%s, casterMP=%d, jobLevels=%v, partySize=%d", 
+
+	log.Printf("[TRIGGER DEBUG] processBuffTrigger: buffType=%s, casterMP=%d, jobLevels=%v, partySize=%d",
 		buffType, context.CasterMP, context.CasterJobLevels, context.PartySize)
-	
+
 	// For buff spells, the target should always be the caster, not the original sender
 	buffTarget := context.CasterName
 	if buffTarget == "" {
 		return "", fmt.Errorf("caster name is required for buff spells but was empty")
 	}
-	
+
 	// Create casting request for buff sequence
 	requestID := fmt.Sprintf("buff_%d", time.Now().UnixNano())
 	request := &CastRequest{
 		ID:       requestID,
 		Type:     CastTypeBuff, // Let engine select optimal buff sequence
-		Target:   buffTarget, // Buff spells target the caster
+		Target:   buffTarget,   // Buff spells target the caster
 		Priority: priority,
 		Context:  context,
 	}
-	
+
 	err := tp.engine.RequestCast(request)
 	if err != nil {
 		return "", fmt.Errorf("failed to request buff cast: %v", err)
 	}
-	
+
 	return requestID, nil
 }
 
@@ -281,11 +306,49 @@ func (tp *TriggerProcessor) castManualSpell(spellName string, target string, pri
 		Priority:  priority,
 		Context:   context,
 	}
-	
+
 	err := tp.engine.RequestCast(request)
 	if err != nil {
 		return "", fmt.Errorf("failed to request manual spell cast: %v", err)
 	}
-	
+
+	return requestID, nil
+}
+
+// processProtectTrigger processes a protect trigger
+func (tp *TriggerProcessor) processProtectTrigger(target string, priority int, context *CastContext) (string, error) {
+	requestID := fmt.Sprintf("protect_%d", time.Now().UnixNano())
+	request := &CastRequest{
+		ID:       requestID,
+		Type:     CastTypeProtect, // Let engine select optimal Protect level
+		Target:   target,
+		Priority: priority,
+		Context:  context,
+	}
+
+	err := tp.engine.RequestCast(request)
+	if err != nil {
+		return "", fmt.Errorf("failed to request protect cast: %v", err)
+	}
+
+	return requestID, nil
+}
+
+// processShellTrigger processes a shell trigger
+func (tp *TriggerProcessor) processShellTrigger(target string, priority int, context *CastContext) (string, error) {
+	requestID := fmt.Sprintf("shell_%d", time.Now().UnixNano())
+	request := &CastRequest{
+		ID:       requestID,
+		Type:     CastTypeShell, // Let engine select optimal Shell level
+		Target:   target,
+		Priority: priority,
+		Context:  context,
+	}
+
+	err := tp.engine.RequestCast(request)
+	if err != nil {
+		return "", fmt.Errorf("failed to request shell cast: %v", err)
+	}
+
 	return requestID, nil
 }

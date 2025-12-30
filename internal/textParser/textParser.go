@@ -3,8 +3,16 @@ package textParser
 import (
 	"PandaBot/internal/protocol"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
+)
+
+// Pre-compiled regex patterns for sender extraction
+var (
+	parensPattern   = regexp.MustCompile(`^\((?P<sender>[a-zA-Z]+)\)\s*(?P<msg>.*)$`)
+	bracketsPattern = regexp.MustCompile(`^\[(?P<sender>[a-zA-Z]+)\]\s*(?P<msg>.*)$`)
+	colonPattern    = regexp.MustCompile(`^(?P<sender>[^:]+):\s*(?P<msg>.*)$`)
 )
 
 // TriggerEvent represents a generic trigger event detected in chat
@@ -16,21 +24,19 @@ type TriggerEvent struct {
 
 // TextParser analyzes chat messages for trigger words and creates generic trigger events
 type TextParser struct {
-	triggerMap       map[string]int // Maps trigger words to priority levels
-	authorizedUsers  map[string]bool
-	mu               sync.RWMutex
+	triggerMap map[string]int // Maps trigger words to priority levels
+	mu         sync.RWMutex
 }
 
 // NewTextParser creates a new text parser with default trigger mappings
 func NewTextParser() *TextParser {
 	parser := &TextParser{
-		triggerMap:      make(map[string]int),
-		authorizedUsers: make(map[string]bool),
+		triggerMap: make(map[string]int),
 	}
-	
+
 	// Initialize default trigger mappings
 	parser.initializeDefaultTriggers()
-	
+
 	return parser
 }
 
@@ -42,7 +48,8 @@ func (tp *TextParser) initializeDefaultTriggers() {
 	tp.triggerMap["silenced"] = 6
 	tp.triggerMap["poisoned"] = 5
 	tp.triggerMap["blinded"] = 4
-	
+	tp.triggerMap["erase"] = 7
+
 	// Buff triggers
 	tp.triggerMap["firebuffs"] = 3
 	tp.triggerMap["waterbuffs"] = 3
@@ -52,7 +59,9 @@ func (tp *TextParser) initializeDefaultTriggers() {
 	tp.triggerMap["icebuffs"] = 3
 	tp.triggerMap["lightbuffs"] = 3
 	tp.triggerMap["darkbuffs"] = 3
-	
+	tp.triggerMap["protect"] = 3
+	tp.triggerMap["shell"] = 3
+
 	// Healing triggers
 	tp.triggerMap["heal"] = 9
 	tp.triggerMap["cure"] = 9
@@ -63,40 +72,71 @@ func (tp *TextParser) initializeDefaultTriggers() {
 func (tp *TextParser) ParseMessage(chatLine *protocol.ChatLine) ([]TriggerEvent, error) {
 	tp.mu.RLock()
 	defer tp.mu.RUnlock()
-	
+
 	if chatLine == nil {
 		return nil, fmt.Errorf("chat line cannot be nil")
 	}
-	
-	// TODO: Re-enable authorization check once user management is implemented
-	// Check if sender is authorized
-	// if !tp.IsAuthorized(chatLine.Sender) {
-	//	return nil, fmt.Errorf("unauthorized sender: %s", chatLine.Sender)
-	// }
-	
+
+	effectiveSender := chatLine.Sender
+	effectiveMessage := chatLine.Message
+
+	// If sender is "Unknown" (common in some party chat formats), try to extract it from the message
+	if effectiveSender == "Unknown" || effectiveSender == "" {
+		if extractedSender, extractedMsg, ok := tp.extractSender(effectiveMessage); ok {
+			effectiveSender = extractedSender
+			effectiveMessage = extractedMsg
+		}
+	}
+
 	var events []TriggerEvent
-	normalizedMessage := tp.normalizeString(chatLine.Message)
-	
+	normalizedMessage := tp.normalizeString(effectiveMessage)
+
 	// Check for trigger words in the message
 	for trigger, priority := range tp.triggerMap {
 		if tp.containsTrigger(normalizedMessage, trigger) {
+			// Validate sender
+			if effectiveSender == "" {
+				continue
+			}
+
 			event := TriggerEvent{
 				TriggerType: trigger,
-				Sender:      chatLine.Sender,
+				Sender:      effectiveSender,
 				Priority:    priority,
 			}
 			events = append(events, event)
 		}
 	}
-	
+
 	return events, nil
+}
+
+// extractSender attempts to extract the sender name and actual message from a composite message
+func (tp *TextParser) extractSender(message string) (string, string, bool) {
+	patterns := []*regexp.Regexp{parensPattern, bracketsPattern, colonPattern}
+
+	for _, pattern := range patterns {
+		matches := pattern.FindStringSubmatch(message)
+		if matches != nil {
+			senderIndex := pattern.SubexpIndex("sender")
+			msgIndex := pattern.SubexpIndex("msg")
+
+			if senderIndex != -1 && msgIndex != -1 {
+				sender := strings.TrimSpace(matches[senderIndex])
+				msg := matches[msgIndex]
+				return sender, msg, true
+			}
+		}
+	}
+
+	return "", "", false
 }
 
 // AddTrigger adds or updates a trigger word mapping
 func (tp *TextParser) AddTrigger(trigger string, priority int) {
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
-	
+
 	tp.triggerMap[tp.normalizeString(trigger)] = priority
 }
 
@@ -104,44 +144,15 @@ func (tp *TextParser) AddTrigger(trigger string, priority int) {
 func (tp *TextParser) RemoveTrigger(trigger string) {
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
-	
+
 	delete(tp.triggerMap, tp.normalizeString(trigger))
-}
-
-// AddAuthorizedUser adds a user to the authorized users list
-func (tp *TextParser) AddAuthorizedUser(username string) {
-	tp.mu.Lock()
-	defer tp.mu.Unlock()
-	
-	tp.authorizedUsers[strings.ToLower(username)] = true
-}
-
-// RemoveAuthorizedUser removes a user from the authorized users list
-func (tp *TextParser) RemoveAuthorizedUser(username string) {
-	tp.mu.Lock()
-	defer tp.mu.Unlock()
-	
-	delete(tp.authorizedUsers, strings.ToLower(username))
-}
-
-// IsAuthorized checks if a user is authorized to trigger actions
-func (tp *TextParser) IsAuthorized(username string) bool {
-	tp.mu.RLock()
-	defer tp.mu.RUnlock()
-	
-	// If no users are specifically authorized, allow all users
-	if len(tp.authorizedUsers) == 0 {
-		return true
-	}
-	
-	return tp.authorizedUsers[strings.ToLower(username)]
 }
 
 // GetTriggers returns a copy of all trigger mappings
 func (tp *TextParser) GetTriggers() map[string]int {
 	tp.mu.RLock()
 	defer tp.mu.RUnlock()
-	
+
 	triggers := make(map[string]int)
 	for k, v := range tp.triggerMap {
 		triggers[k] = v
@@ -157,7 +168,7 @@ func (tp *TextParser) normalizeString(s string) string {
 // containsTrigger checks if a normalized message contains a trigger word
 func (tp *TextParser) containsTrigger(normalizedMessage, trigger string) bool {
 	normalizedTrigger := tp.normalizeString(trigger)
-	
+
 	// Check for exact word match (not just substring)
 	words := strings.Fields(normalizedMessage)
 	for _, word := range words {
@@ -165,7 +176,7 @@ func (tp *TextParser) containsTrigger(normalizedMessage, trigger string) bool {
 			return true
 		}
 	}
-	
+
 	// Also check for substring match for compound words
 	return strings.Contains(normalizedMessage, normalizedTrigger)
 }

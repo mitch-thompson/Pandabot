@@ -31,6 +31,7 @@ graph TB
         SM[Status Monitor]
         CS[Cure Selector]
         NS[Na Spell Selector]
+        EDM[Echo Drop Manager]
     end
     
     LA <--> CM
@@ -38,8 +39,10 @@ graph TB
     CM --> SM
     TP --> SP
     SM --> SP
+    SM --> EDM
     SP --> CS
     SP --> NS
+    EDM --> SP
     SP --> CM
 ```
 
@@ -118,6 +121,12 @@ graph TB
 - Prioritizes life-threatening conditions
 - Validates spell availability and MP requirements
 
+#### Echo Drop Manager
+- Monitors player silence status in real-time
+- Manages echo drop inventory tracking
+- Prioritizes echo drop usage above all other actions when player is silenced
+- Interrupts current casting queues for immediate silence removal
+
 ## Data Models
 
 ### Simple Text Protocol
@@ -161,6 +170,7 @@ type StatusUpdate struct {
     PartyMembers []PartyMember  `msgpack:"party"`
     PlayerMP     int            `msgpack:"mp"`
     PlayerHP     int            `msgpack:"hp"`
+    PlayerStatus []int          `msgpack:"player_status"` // Player's own status effects
     Zone         string         `msgpack:"zone"`
 }
 
@@ -171,6 +181,12 @@ type PartyMember struct {
     StatusEffects []int   `msgpack:"status"`
     Job          string   `msgpack:"job"`
     Distance     float32  `msgpack:"dist"`
+}
+
+type ItemCommand struct {
+    ItemName string `msgpack:"item"`     // "Echo Drop"
+    Target   string `msgpack:"target"`   // "<me>" for self-use items
+    Priority int    `msgpack:"pri"`      // Always highest priority (10) for silence removal
 }
 ```
 
@@ -353,6 +369,26 @@ Property 34: Server routing isolation
 *For any* trigger event processed by the Server, it should only route events to the Casting_System without performing casting-related logic
 **Validates: Requirements 8.9**
 
+Property 35: Echo drop priority over all actions
+*For any* game state where the player has the silence status effect, the Go_Server should prioritize using an echo drop above all other actions including healing and buffing
+**Validates: Requirements 10.1**
+
+Property 36: Immediate echo drop command generation
+*For any* scenario where the player is silenced and an echo drop is available in inventory, the Go_Server should immediately send an Action_Command to use the echo drop
+**Validates: Requirements 10.2**
+
+Property 37: Echo drop unavailability handling
+*For any* scenario where the player is silenced and no echo drop is available, the Go_Server should log the unavailability and continue with other priority actions
+**Validates: Requirements 10.3**
+
+Property 38: Casting queue interruption for silence
+*For any* active casting queue when the silence status effect is detected on the player, the Go_Server should interrupt the current queue to prioritize echo drop usage
+**Validates: Requirements 10.4**
+
+Property 39: Normal operations resumption after silence removal
+*For any* successful echo drop usage that removes silence, the Go_Server should resume normal spell casting operations and update its internal status tracking
+**Validates: Requirements 10.5**
+
 ## Error Handling
 
 ### Connection Failures
@@ -370,6 +406,8 @@ Property 34: Server routing isolation
 - **Party Member Not Found**: Skip actions for missing members, update internal state
 - **Spell Unavailable**: Fall back to alternative spells or queue for later
 - **Casting Interruption**: Retry mechanism with configurable attempts and delays
+- **Echo Drop Unavailable**: Log unavailability when player is silenced, continue with other actions
+- **Item Usage Failure**: Retry echo drop usage with exponential backoff, fall back to alternative silence removal methods
 
 ### Data Validation
 - **Status Update Validation**: Verify HP/MP percentages are within valid ranges (0-100)

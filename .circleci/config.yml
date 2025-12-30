@@ -1,0 +1,82 @@
+version: 2.1
+
+orbs:
+  go: circleci/go@1.11.0
+
+jobs:
+  test:
+    executor:
+      name: go/default
+      tag: '1.25'
+    steps:
+      - checkout
+      - go/load-cache
+      - go/mod-download
+      - go/save-cache
+      - run:
+          name: Run Tests
+          command: go test -v ./...
+
+  build-windows:
+    executor:
+      name: go/default
+      tag: '1.25'
+    steps:
+      - checkout
+      - go/load-cache
+      - go/mod-download
+      - run:
+          name: Build Windows Executable
+          command: |
+            mkdir -p dist
+            GOOS=windows GOARCH=amd64 go build -o dist/pandabot.exe ./cmd/pandabot
+            cp -r cmd/addon dist/
+      - run:
+          name: Package for Windows
+          command: |
+            cd dist
+            zip -r pandabot-windows-amd64.zip pandabot.exe addon/
+      - persist_to_workspace:
+          root: dist
+          paths:
+            - pandabot-windows-amd64.zip
+
+  publish-github:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - attach_workspace:
+          at: dist
+      - run:
+          name: Create GitHub Release
+          command: |
+            # This step requires GITHUB_TOKEN to be set in CircleCI environment variables
+            if [ -z "$CIRCLE_TAG" ]; then
+              echo "Not a tag, skipping release creation"
+              exit 0
+            fi
+            gh release create "$CIRCLE_TAG" dist/pandabot-windows-amd64.zip --title "Release $CIRCLE_TAG" --notes "Automated build for $CIRCLE_TAG"
+
+workflows:
+  version: 2
+  build-test-publish:
+    jobs:
+      - test:
+          filters:
+            tags:
+              only: /^v.*/
+      - build-windows:
+          requires:
+            - test
+          filters:
+            tags:
+              only: /^v.*/
+      - publish-github:
+          requires:
+            - build-windows
+          filters:
+            tags:
+              only: /^v.*/
+            branches:
+              ignore: /.*/

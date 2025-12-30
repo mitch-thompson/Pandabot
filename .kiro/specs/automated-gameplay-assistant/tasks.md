@@ -125,14 +125,43 @@
   - **Property 21: State tracking after status removal**
   - **Validates: Requirements 6.5**
 
+- [x] 5.6 Implement echo drop manager for silence handling
+
+
+
+  - Create EchoDropManager component to monitor player silence status
+  - Add logic to prioritize echo drop usage above all other actions when player is silenced
+  - Implement inventory tracking for echo drop availability
+  - Add casting queue interruption when silence is detected
+  - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5_
+
+- [x] 5.7 Write property test for echo drop priority over all actions
+  - **Property 35: Echo drop priority over all actions**
+  - **Validates: Requirements 10.1**
+
+- [x] 5.8 Write property test for immediate echo drop command generation
+  - **Property 36: Immediate echo drop command generation**
+  - **Validates: Requirements 10.2**
+
+- [x] 5.9 Write property test for echo drop unavailability handling
+  - **Property 37: Echo drop unavailability handling**
+  - **Validates: Requirements 10.3**
+
+- [x] 5.10 Write property test for casting queue interruption for silence
+  - **Property 38: Casting queue interruption for silence**
+  - **Validates: Requirements 10.4**
+
+- [x] 5.11 Write property test for normal operations resumption after silence removal
+  - **Property 39: Normal operations resumption after silence removal**
+  - **Validates: Requirements 10.5**
+
 - [x] 6. Enhance Lua plugin with status monitoring
 
-
-
   - Extend existing Lua plugin to collect party member HP, MP, and status data
-  - Implement periodic status reporting to Go server
+  - Add player's own status effect monitoring for silence detection
+  - Implement periodic status reporting to Go server including player status
   - Add game interface handlers for status data extraction
-  - _Requirements: 3.1, 3.2_
+  - _Requirements: 3.1, 3.2, 10.1_
 
 - [x] 6.1 Write property test for periodic status reporting
 
