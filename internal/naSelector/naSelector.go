@@ -55,6 +55,7 @@ func (ns *NaSpellSelector) initializeDefaultMappings() {
 		{ID: 6, Name: "Silence", Severity: 7, NaSpell: "Silena"},
 		{ID: 7, Name: "Petrification", Severity: 9, NaSpell: "Stona"},
 		{ID: 8, Name: "Disease", Severity: 6, NaSpell: "Viruna"},
+		{ID: 31, Name: "Plague", Severity: 6, NaSpell: "Viruna"},
 		{ID: 9, Name: "Curse", Severity: 7, NaSpell: "Cursna"},
 		{ID: 10, Name: "Stun", Severity: 3, NaSpell: ""},             // No direct "na" spell
 		{ID: 11, Name: "Bind", Severity: 4, NaSpell: "Erase"},        // No direct "na" spell
@@ -122,7 +123,7 @@ func (ns *NaSpellSelector) initializeDefaultMappings() {
 			SpellName: "Viruna",
 			MPCost:    18,
 			CastTime:  2.0,
-			Targets:   []int{8}, // Disease
+			Targets:   []int{8, 31}, // Disease, Plague
 			Priority:  6,
 		},
 		{

@@ -23,22 +23,22 @@ const (
 
 // PrioritizedAction represents an action with its calculated priority
 type PrioritizedAction struct {
-	Command     *protocol.ExecuteCommand
-	ActionType  ActionType
-	Priority    int     // 1-10, higher is more urgent
-	MPCost      int     // MP cost of the action
-	Target      string  // Target player name
-	Urgency     float64 // Calculated urgency score
-	Timestamp   time.Time
+	Command    *protocol.ExecuteCommand
+	ActionType ActionType
+	Priority   int     // 1-10, higher is more urgent
+	MPCost     int     // MP cost of the action
+	Target     string  // Target player name
+	Urgency    float64 // Calculated urgency score
+	Timestamp  time.Time
 }
 
 // SpellPrioritizer manages and prioritizes spell casting actions
 type SpellPrioritizer struct {
-	actionQueue    []PrioritizedAction
-	spellDatabase  map[string]*spell.Spell
-	partyState     map[string]*entity.Entity
-	playerMP       int
-	mu             sync.RWMutex
+	actionQueue   []PrioritizedAction
+	spellDatabase map[string]*spell.Spell
+	partyState    map[string]*entity.Entity
+	playerMP      int
+	mu            sync.RWMutex
 }
 
 // NewSpellPrioritizer creates a new spell prioritizer
@@ -55,9 +55,9 @@ func NewSpellPrioritizer() *SpellPrioritizer {
 func (sp *SpellPrioritizer) UpdatePartyState(statusUpdate *protocol.StatusUpdate) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	
+
 	sp.playerMP = statusUpdate.PlayerMP
-	
+
 	// Update party member states
 	for _, member := range statusUpdate.PartyMembers {
 		entity := &entity.Entity{
@@ -67,7 +67,7 @@ func (sp *SpellPrioritizer) UpdatePartyState(statusUpdate *protocol.StatusUpdate
 			Job:       member.Job,
 			Distance:  member.Distance,
 		}
-		
+
 		// Use actual HP/MP values if available (from Ashita v4)
 		if member.HPActual > 0 {
 			entity.HPcurrent = uint32(member.HPActual)
@@ -76,7 +76,7 @@ func (sp *SpellPrioritizer) UpdatePartyState(statusUpdate *protocol.StatusUpdate
 				entity.HPMax = uint32(float64(member.HPActual) * 100.0 / float64(member.HPPercent))
 			}
 		}
-		
+
 		// Convert status effects
 		if len(member.StatusEffects) > 0 {
 			for i, effect := range member.StatusEffects {
@@ -85,7 +85,7 @@ func (sp *SpellPrioritizer) UpdatePartyState(statusUpdate *protocol.StatusUpdate
 				}
 			}
 		}
-		
+
 		sp.partyState[member.Name] = entity
 	}
 }
@@ -101,7 +101,7 @@ func (sp *SpellPrioritizer) AddTextParserActions(actions []textParser.TriggerEve
 func (sp *SpellPrioritizer) AddHealthBasedActions(cureThreshold int) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	
+
 	for name, member := range sp.partyState {
 		if member.NeedsCure(cureThreshold) {
 			cureSpell := sp.selectOptimalCure(member)
@@ -120,16 +120,16 @@ func (sp *SpellPrioritizer) AddHealthBasedActions(cureThreshold int) {
 					Urgency:    sp.calculateHealthUrgency(member),
 					Timestamp:  time.Now(),
 				}
-				
+
 				if spellData, exists := sp.spellDatabase[cureSpell]; exists {
 					prioritizedAction.MPCost = int(spellData.MPCost)
 				}
-				
+
 				sp.actionQueue = append(sp.actionQueue, prioritizedAction)
 			}
 		}
 	}
-	
+
 	sp.prioritizeQueue()
 }
 
@@ -137,7 +137,7 @@ func (sp *SpellPrioritizer) AddHealthBasedActions(cureThreshold int) {
 func (sp *SpellPrioritizer) AddStatusRemovalActions() {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	
+
 	for name, member := range sp.partyState {
 		naSpells := sp.determineRequiredNaSpells(member)
 		for _, naSpell := range naSpells {
@@ -155,15 +155,15 @@ func (sp *SpellPrioritizer) AddStatusRemovalActions() {
 				Urgency:    sp.calculateStatusUrgency(naSpell),
 				Timestamp:  time.Now(),
 			}
-			
+
 			if spellData, exists := sp.spellDatabase[naSpell]; exists {
 				prioritizedAction.MPCost = int(spellData.MPCost)
 			}
-			
+
 			sp.actionQueue = append(sp.actionQueue, prioritizedAction)
 		}
 	}
-	
+
 	sp.prioritizeQueue()
 }
 
@@ -171,11 +171,11 @@ func (sp *SpellPrioritizer) AddStatusRemovalActions() {
 func (sp *SpellPrioritizer) GetNextAction() (*PrioritizedAction, error) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	
+
 	if len(sp.actionQueue) == 0 {
 		return nil, fmt.Errorf("no actions in queue")
 	}
-	
+
 	// Find the first action we can afford
 	for i, action := range sp.actionQueue {
 		if sp.canAffordAction(&action) {
@@ -184,7 +184,7 @@ func (sp *SpellPrioritizer) GetNextAction() (*PrioritizedAction, error) {
 			return &action, nil
 		}
 	}
-	
+
 	return nil, fmt.Errorf("insufficient MP for any queued actions")
 }
 
@@ -192,16 +192,16 @@ func (sp *SpellPrioritizer) GetNextAction() (*PrioritizedAction, error) {
 func (sp *SpellPrioritizer) GetQueueStatus() (int, int) {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
-	
+
 	totalActions := len(sp.actionQueue)
 	affordableActions := 0
-	
+
 	for _, action := range sp.actionQueue {
 		if sp.canAffordAction(&action) {
 			affordableActions++
 		}
 	}
-	
+
 	return totalActions, affordableActions
 }
 
@@ -209,7 +209,7 @@ func (sp *SpellPrioritizer) GetQueueStatus() (int, int) {
 func (sp *SpellPrioritizer) ClearQueue() {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	
+
 	sp.actionQueue = make([]PrioritizedAction, 0)
 }
 
@@ -217,22 +217,22 @@ func (sp *SpellPrioritizer) ClearQueue() {
 func (sp *SpellPrioritizer) prioritizeQueue() {
 	sort.Slice(sp.actionQueue, func(i, j int) bool {
 		a, b := sp.actionQueue[i], sp.actionQueue[j]
-		
+
 		// First sort by action type priority (healing > status removal > buffs)
 		if a.ActionType != b.ActionType {
 			return sp.getActionTypePriority(a.ActionType) > sp.getActionTypePriority(b.ActionType)
 		}
-		
+
 		// Then by priority level
 		if a.Priority != b.Priority {
 			return a.Priority > b.Priority
 		}
-		
+
 		// Then by urgency
 		if a.Urgency != b.Urgency {
 			return a.Urgency > b.Urgency
 		}
-		
+
 		// Finally by timestamp (older first)
 		return a.Timestamp.Before(b.Timestamp)
 	})
@@ -270,7 +270,7 @@ func (sp *SpellPrioritizer) getActionTypePriority(actionType ActionType) int {
 
 func (sp *SpellPrioritizer) selectOptimalCure(member *entity.Entity) string {
 	missingHP := 100 - int(member.HPPercent)
-	
+
 	switch {
 	case missingHP >= 80:
 		return "Cure IV"
@@ -291,13 +291,13 @@ func (sp *SpellPrioritizer) calculateHealthPriority(member *entity.Entity) int {
 	case hp <= 20:
 		return 10 // Critical
 	case hp <= 40:
-		return 8  // High
+		return 8 // High
 	case hp <= 60:
-		return 6  // Medium
+		return 6 // Medium
 	case hp <= 80:
-		return 4  // Low
+		return 4 // Low
 	default:
-		return 2  // Very low
+		return 2 // Very low
 	}
 }
 
@@ -307,10 +307,10 @@ func (sp *SpellPrioritizer) calculateHealthUrgency(member *entity.Entity) float6
 
 func (sp *SpellPrioritizer) determineRequiredNaSpells(member *entity.Entity) []string {
 	var naSpells []string
-	
+
 	// This would need to check actual status effects from member.Buffs
 	// For now, return empty slice as status effect detection needs more implementation
-	
+
 	return naSpells
 }
 

@@ -14,7 +14,6 @@ local config = {
 	max_reconnect_attempts = 10,
 	base_reconnect_delay = 1000, -- 1 second
 	max_message_queue_size = 100,
-	max_command_queue_size = 50,
 	command_timeout = 30000, -- 30 seconds
 	debug_mode = false
 }
@@ -699,7 +698,7 @@ ashita.events.register('d3d_present', 'pandabot_present', function()
 	receive_messages()
 
 	-- Process command queue
-	process_command_queue()
+	--process_command_queue()
 
 	-- Process pending spells for completion tracking
 	process_pending_spells()
@@ -954,9 +953,6 @@ function handle_server_message(message)
 	end
 end
 
--- Command queue for priority-based execution
-local command_queue = {}
-
 ----------------------------------------------------------------------------------------------------
 -- Handle execute command from server
 ----------------------------------------------------------------------------------------------------
@@ -966,64 +962,15 @@ function handle_execute_command(command_data)
 		return
 	end
 
-	-- Add command to priority queue
 	local priority = command_data.priority or 5 -- Default priority
-	local command_entry = {
-		command = command_data.command,
-		target = command_data.target,
-		priority = priority,
-		id = command_data.id,
-		timestamp = os.time(),
-		timeout = command_data.timeout or config.command_timeout -- Default timeout from config
-	}
+	print(COLOR_CYAN .. '[PandaBot] ' .. COLOR_DEFAULT .. 'Executing command (priority ' .. priority .. '): ' .. command_data.command)
 
-	table.insert(command_queue, command_entry)
-
-	-- Limit command queue size
-	if #command_queue > config.max_command_queue_size then
-		table.remove(command_queue, #command_queue) -- Remove lowest priority command
-		debug_log('Command queue full, removed oldest command')
-	end
-
-	-- Sort queue by priority (higher priority first)
-	table.sort(command_queue, function(a, b)
-		return a.priority > b.priority
-	end)
-
-	print(COLOR_CYAN .. '[PandaBot] ' .. COLOR_DEFAULT .. 'Queued command (priority ' .. priority .. '): ' .. command_data.command)
-	debug_log('Command queue size: ' .. #command_queue)
-end
-
-----------------------------------------------------------------------------------------------------
--- Process command queue (called from main loop)
-----------------------------------------------------------------------------------------------------
-function process_command_queue()
-	if #command_queue == 0 then
-		return
-	end
-
-	-- Get highest priority command
-	local command_entry = table.remove(command_queue, 1)
-
-	-- Check if command has timed out
-	local current_time = os.time() * 1000 -- Convert to milliseconds
-	if current_time - (command_entry.timestamp * 1000) > command_entry.timeout then
-		print(COLOR_RED .. '[PandaBot Error] ' .. COLOR_DEFAULT .. 'Command timed out: ' .. command_entry.command)
-
-		if command_entry.id then
-			send_spell_failure(command_entry.id, "Command timed out")
-		end
-		return
-	end
-
-	print(COLOR_CYAN .. '[PandaBot] ' .. COLOR_DEFAULT .. 'Executing: ' .. command_entry.command)
-
-	-- Execute the command with ID for completion tracking
-	local success = execute_command(command_entry.command, command_entry.id)
+	-- Execute the command immediately
+	local success = execute_command(command_data.command, command_data.id)
 
 	-- Send error report if command failed
-	if not success and command_entry.id then
-		send_spell_failure(command_entry.id, "Command execution failed")
+	if not success and command_data.id then
+		send_spell_failure(command_data.id, "Command execution failed")
 	end
 end
 

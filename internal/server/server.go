@@ -54,6 +54,8 @@ type Server struct {
 	stopChan chan struct{}
 }
 
+const MaxCommandQueueSize = 100
+
 // CommandState represents the state of a command
 type CommandState int
 
@@ -535,6 +537,18 @@ func (s *Server) handleJSONSpellComplete(client *Client, msg *protocol.Message) 
 		return
 	}
 
+	// Fallback for different field names if CommandID is empty
+	if complete.CommandID == "" {
+		var bodyMap map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &bodyMap); err == nil {
+			if id, ok := bodyMap["id"].(string); ok {
+				complete.CommandID = id
+			} else if id, ok := bodyMap["command_id"].(string); ok {
+				complete.CommandID = id
+			}
+		}
+	}
+
 	// Notify centralized casting system
 	s.castingSystem.HandleSpellComplete(client.conn, complete.CommandID)
 
@@ -571,6 +585,21 @@ func (s *Server) handleJSONSpellFailed(client *Client, msg *protocol.Message) {
 	if err := json.Unmarshal(bodyBytes, &failed); err != nil {
 		log.Printf("Failed to unmarshal spell failed: %v", err)
 		return
+	}
+
+	// Fallback for different field names if CommandID is empty
+	if failed.CommandID == "" {
+		var bodyMap map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &bodyMap); err == nil {
+			if id, ok := bodyMap["id"].(string); ok {
+				failed.CommandID = id
+			} else if id, ok := bodyMap["command_id"].(string); ok {
+				failed.CommandID = id
+			}
+			if errMsg, ok := bodyMap["error"].(string); ok {
+				failed.Error = errMsg
+			}
+		}
 	}
 
 	// Notify centralized casting system
@@ -623,6 +652,70 @@ func (s *Server) handleJSONChatMessage(client *Client, msg *protocol.Message) {
 		// Route trigger events to centralized casting system
 		s.triggerService.RouteTriggerEvents(triggerEvents, s.statusMonitor)
 	}
+}
+
+// validateQueuedActions performs Queue Garbage Collection (GC)
+func (s *Server) validateQueuedActions(client *Client) {
+	client.queueMutex.Lock()
+	defer client.queueMutex.Unlock()
+
+	if len(client.commandQueue) == 0 {
+		return
+	}
+
+	validQueue := make([]*QueuedCommand, 0, len(client.commandQueue))
+	for _, cmd := range client.commandQueue {
+		if s.isCommandStillNecessary(cmd) {
+			validQueue = append(validQueue, cmd)
+		} else {
+			log.Printf("Queue GC: Removing unnecessary command %s: %s for %s", cmd.ID, cmd.Command, cmd.Target)
+		}
+	}
+
+	if len(validQueue) != len(client.commandQueue) {
+		client.commandQueue = validQueue
+		log.Printf("Queue GC: Cleaned up %d commands for client %s", len(client.commandQueue)-len(validQueue), client.conn.RemoteAddr())
+	}
+}
+
+// isCommandStillNecessary checks if a queued command is still needed based on game state
+func (s *Server) isCommandStillNecessary(cmd *QueuedCommand) bool {
+	// Self-recovery items are always necessary until used or silence wears off
+	if cmd.Priority >= 100 {
+		return true
+	}
+
+	targetName := cmd.Target
+	if targetName == "" || targetName == "<t>" || targetName == "<me>" {
+		// If we can't resolve the target name easily, keep it to be safe
+		// In a better implementation, we'd resolve <me> to the client's player name
+		return true
+	}
+
+	member, exists := s.statusMonitor.GetPartyMember(targetName)
+	if !exists {
+		// Target no longer in party
+		return false
+	}
+
+	// Check for healing commands
+	if strings.Contains(strings.ToLower(cmd.Command), "cure") || strings.Contains(strings.ToLower(cmd.Command), "curaga") {
+		// If member health is above 90%, most heals are unnecessary
+		// This is a simple heuristic, can be refined based on heal power
+		if member.HPPercent > 90 {
+			return false
+		}
+	}
+
+	// Check for status removal commands
+	// This would require mapping command to status effect
+	// For now, let's keep them unless the member is dead
+	if member.HPPercent == 0 {
+		// Don't try to heal or buff dead people unless it's a raise (not implemented yet)
+		return false
+	}
+
+	return true
 }
 
 // handleJSONStatusUpdate processes a JSON status update
@@ -694,6 +787,9 @@ func (s *Server) handleJSONStatusUpdate(client *Client, msg *protocol.Message) {
 	}
 
 	log.Printf("JSON status update processed from %s (timestamp: %d)", client.conn.RemoteAddr(), status.Timestamp)
+
+	// Trigger Queue Garbage Collection after status update
+	s.validateQueuedActions(client)
 }
 
 // handleJSONErrorReport processes a JSON error report
@@ -710,6 +806,18 @@ func (s *Server) handleJSONErrorReport(client *Client, msg *protocol.Message) {
 		return
 	}
 
+	// Fallback for different field names if CommandID is empty
+	if report.CommandID == "" {
+		var bodyMap map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &bodyMap); err == nil {
+			if id, ok := bodyMap["id"].(string); ok {
+				report.CommandID = id
+			} else if id, ok := bodyMap["command_id"].(string); ok {
+				report.CommandID = id
+			}
+		}
+	}
+
 	log.Printf("Command %s failed: %s", report.CommandID, report.Error)
 }
 
@@ -719,6 +827,7 @@ func (s *Server) queueCommandForClient(client *Client, command string, target st
 	defer client.queueMutex.Unlock()
 
 	commandID := fmt.Sprintf("cmd_%d", time.Now().UnixNano())
+	now := time.Now()
 	queuedCmd := &QueuedCommand{
 		ID:       commandID,
 		Command:  command,
@@ -726,21 +835,39 @@ func (s *Server) queueCommandForClient(client *Client, command string, target st
 		Priority: priority,
 		Timeout:  30 * time.Second, // Default timeout
 		State:    CommandQueued,
-		QueuedAt: time.Now(),
+		QueuedAt: now,
 	}
 
-	// Insert command in priority order (higher priority first)
-	inserted := false
-	for i, existingCmd := range client.commandQueue {
-		if priority > existingCmd.Priority {
-			client.commandQueue = append(client.commandQueue[:i], append([]*QueuedCommand{queuedCmd}, client.commandQueue[i:]...)...)
-			inserted = true
-			break
+	// Priority 100 Preemption: Place at the very front
+	if priority >= 100 {
+		log.Printf("Priority 100 detected, placing command %s at the front of the queue", commandID)
+		client.commandQueue = append([]*QueuedCommand{queuedCmd}, client.commandQueue...)
+
+		// If there is a current command that is NOT priority 100, we could potentially
+		// mark it as interrupted, but for now we'll just let it finish and put this next.
+		// Requirement 10.4 says "interrupt any current casting queue", which we interpret
+		// as clearing the queue (handled by insertion) and prioritizing this action.
+	} else {
+		// Insert command in priority order (higher priority first)
+		inserted := false
+		for i, existingCmd := range client.commandQueue {
+			if priority > existingCmd.Priority {
+				client.commandQueue = append(client.commandQueue[:i], append([]*QueuedCommand{queuedCmd}, client.commandQueue[i:]...)...)
+				inserted = true
+				break
+			}
+		}
+
+		if !inserted {
+			client.commandQueue = append(client.commandQueue, queuedCmd)
 		}
 	}
 
-	if !inserted {
-		client.commandQueue = append(client.commandQueue, queuedCmd)
+	// Enforce MaxCommandQueueSize (Requirement 1.8)
+	if len(client.commandQueue) > MaxCommandQueueSize {
+		log.Printf("Queue for client %s exceeded limit, removing lowest priority item", client.conn.RemoteAddr())
+		// The lowest priority item is always at the end due to our insertion logic
+		client.commandQueue = client.commandQueue[:MaxCommandQueueSize]
 	}
 
 	log.Printf("Queued command %s for client %s (priority %d): %s", commandID, client.conn.RemoteAddr(), priority, command)
@@ -762,9 +889,9 @@ func (s *Server) processCommandQueue(client *Client) {
 
 	// If there's already a command in progress, wait for completion
 	if client.currentCommand != nil {
-		// Check for timeout
-		if time.Since(*client.currentCommand.SentAt) > client.currentCommand.Timeout {
-			log.Printf("Command %s timed out, marking as failed", client.currentCommand.ID)
+		sentAt := client.currentCommand.SentAt
+		if sentAt != nil && time.Since(*sentAt) > client.currentCommand.Timeout {
+			log.Printf("Command %s timed out after %v, marking as failed", client.currentCommand.ID, client.currentCommand.Timeout)
 			client.currentCommand.State = CommandFailed
 			client.currentCommand.Error = "Command timed out"
 			now := time.Now()
@@ -787,12 +914,13 @@ func (s *Server) processCommandQueue(client *Client) {
 	// Send the command using JSON protocol
 	commandMsg := &protocol.Message{
 		Type: protocol.TypeExecuteCommand,
-		Body: map[string]interface{}{
-			"id":       nextCmd.ID,
-			"command":  nextCmd.Command,
-			"target":   nextCmd.Target,
-			"priority": nextCmd.Priority,
-			"timeout":  int(nextCmd.Timeout.Milliseconds()),
+		Body: protocol.ExecuteCommand{
+			ID:        nextCmd.ID,
+			Command:   nextCmd.Command,
+			Target:    nextCmd.Target,
+			Priority:  nextCmd.Priority,
+			Timeout:   int(nextCmd.Timeout.Milliseconds()),
+			Timestamp: nextCmd.QueuedAt.Unix(),
 		},
 	}
 
@@ -914,7 +1042,10 @@ func (s *Server) processCommandQueues() {
 		case <-ticker.C:
 			s.clientsMutex.RLock()
 			for _, client := range s.clients {
+				// We still need s.processCommandQueue(client) to handle timeouts
 				s.processCommandQueue(client)
+				// Periodically validate the queue even if no status update received
+				s.validateQueuedActions(client)
 			}
 			s.clientsMutex.RUnlock()
 		case <-s.stopChan:

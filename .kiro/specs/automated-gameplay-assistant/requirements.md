@@ -30,10 +30,12 @@ The Automated Gameplay Assistant is a system consisting of a Lua addon for Ashit
 1. WHEN the Go_Server sends an Action_Command to the Lua_Addon, THEN the Lua_Addon SHALL execute the command in the game client using Ashita v4's command system
 2. WHEN an Action_Command contains spell casting instructions, THEN the Lua_Addon SHALL parse the spell name and target correctly and execute via Ashita v4's command execution
 3. WHEN an Action_Command is malformed or invalid, THEN the Lua_Addon SHALL log the error using Ashita v4's print functions and continue normal operation
-4. WHEN the Lua_Addon receives multiple Action_Commands, THEN the Lua_Addon SHALL execute them based on priority, with critical actions preempting lower priority actions
+4. WHEN the Go_Server generates multiple Action_Commands, THEN the Go_Server SHALL prioritize them based on numerical priority (1-100) and only send the next command after the current one completes
 5. WHEN an Action_Command execution fails, THEN the Lua_Addon SHALL report the failure status back to the Go_Server
 6. WHEN multiple spells need to be cast in sequence, THEN the Go_Server SHALL queue commands server-side and only send the next command after receiving completion notification from the Lua_Addon for the previous command
 7. WHEN a spell finishes casting, THEN the Lua_Addon SHALL notify the Go_Server of spell completion to trigger the next queued command
+8. WHEN the Go_Server receives an Action_Command request, THEN it SHALL maintain a master queue of up to 100 commands per client, removing lower priority actions if necessary
+9. WHEN the Go_Server detects that a queued Action_Command is no longer necessary (e.g., target is at full HP, debuff has worn off, or target is dead), THEN the Go_Server SHALL remove that command from the master queue (Queue Garbage Collection)
 
 ### Requirement 2
 
@@ -66,11 +68,13 @@ The Automated Gameplay Assistant is a system consisting of a Lua addon for Ashit
 
 #### Acceptance Criteria
 
-1. WHEN multiple healing needs are detected simultaneously, THEN the Spell_Prioritizer SHALL rank actions by urgency and importance
-2. WHEN a Party_Member has critically low health, THEN the Spell_Prioritizer SHALL prioritize cure spells over buff spells
-3. WHEN multiple Party_Members need healing, THEN the Spell_Prioritizer SHALL prioritize based on health percentage and role importance
-4. WHEN status removal spells are needed, THEN the Spell_Prioritizer SHALL prioritize life-threatening conditions over minor debuffs
+1. WHEN multiple healing needs are detected simultaneously, THEN the Spell_Prioritizer SHALL rank actions by urgency and importance using a 1-100 numerical scale
+2. WHEN a Party_Member has critically low health (<= 20%), THEN the Spell_Prioritizer SHALL assign a "Higher" priority (value 80) to cure spells
+3. WHEN multiple Party_Members need healing, THEN the Spell_Prioritizer SHALL prioritize based on health percentage and role importance, with non-critical cures (> 20% HP) assigned "Normal" priority (value 40)
+4. WHEN status removal spells are needed, THEN the Spell_Prioritizer SHALL prioritize life-threatening conditions (e.g., Stona, Paralyna, Silena) with "High" priority (value 60) over minor debuffs
 5. WHEN spell casting resources are limited, THEN the Spell_Prioritizer SHALL optimize MP usage and casting efficiency
+6. WHEN utility actions like buffs, Shell, or Protect are needed, THEN the Spell_Prioritizer SHALL assign them "Lowest" priority (value 20)
+7. WHEN an Action_Command is generated, it SHALL include essential metadata: Action, Target, Priority (1-100), ID, and Timestamp
 
 ### Requirement 5
 
@@ -146,7 +150,7 @@ The Automated Gameplay Assistant is a system consisting of a Lua addon for Ashit
 
 #### Acceptance Criteria
 
-1. WHEN the player has the silence status effect, THEN the Go_Server SHALL prioritize using an echo drop above all other actions including healing and buffing
+1. WHEN the player has the silence status effect, THEN the Go_Server SHALL prioritize using an echo drop above all other actions including healing and buffing, assigning it the "Highest" priority (value 100)
 2. WHEN the player is silenced and an echo drop is available in inventory, THEN the Go_Server SHALL immediately send an Action_Command to use the echo drop
 3. WHEN the player is silenced and no echo drop is available, THEN the Go_Server SHALL log the unavailability and continue with other priority actions
 4. WHEN the silence status effect is detected on the player, THEN the Go_Server SHALL interrupt any current casting queue to prioritize the echo drop usage

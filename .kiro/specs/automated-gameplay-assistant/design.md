@@ -4,7 +4,7 @@
 
 The Automated Gameplay Assistant is a distributed system consisting of a Lua addon for the Ashita v4 game client and a Go server that provides intelligent automation for spell casting, status monitoring, and text parsing. The system enables real-time analysis of party status, automated responses to chat triggers, and prioritized action execution based on game state.
 
-The architecture follows a client-server model where the lightweight Lua addon handles game interface operations using Ashita v4's addon framework and memory pointers while the Go server performs complex decision-making, prioritization, and state management. Communication occurs over TCP using a simple line-delimited text protocol for maximum compatibility and reliability.
+The architecture follows a client-server model where the lightweight Lua addon handles game interface operations using Ashita v4's addon framework and memory pointers while the Go server performs complex decision-making, prioritization, and state management. Communication occurs over TCP using a JSON-based protocol for maximum compatibility and reliability.
 
 ## Architecture
 
@@ -27,32 +27,35 @@ graph TB
     subgraph "Go Server"
         CM[Connection Manager]
         TP[Text Parser]
-        SP[Spell Prioritizer]
         SM[Status Monitor]
+        CastingSystem[Casting System]
+        MasterQueue[Master Command Queue]
         CS[Cure Selector]
         NS[Na Spell Selector]
         EDM[Echo Drop Manager]
     end
     
-    LA <--> CM
+    LA <-- JSON over TCP --> CM
     CM --> TP
     CM --> SM
-    TP --> SP
-    SM --> SP
-    SM --> EDM
-    SP --> CS
-    SP --> NS
-    EDM --> SP
-    SP --> CM
+    TP --> CastingSystem
+    SM --> CastingSystem
+    CastingSystem --> CS
+    CastingSystem --> NS
+    CastingSystem --> EDM
+    CastingSystem --> MasterQueue
+    MasterQueue --> CM
 ```
 
 ### Communication Flow
 
-1. **Status Updates**: Lua addon uses Ashita v4 memory pointers to read party status and sends to Go server via text protocol
-2. **Chat Monitoring**: Lua addon uses Ashita v4 text events to capture tells/party messages and forwards to Go server
-3. **Decision Making**: Go server analyzes data and determines required actions using simple text parsing
-4. **Action Execution**: Go server sends prioritized commands back to Lua addon using line-delimited text messages
-5. **Game Execution**: Lua addon uses Ashita v4 command system to execute spells and actions in the game client
+1. **Status Updates**: Lua addon uses Ashita v4 memory pointers to read party status (including actual HP/MP values) and sends to Go server via JSON protocol
+2. **Chat Monitoring**: Lua addon uses Ashita v4 text events to capture tells/party messages and forwards to Go server as JSON
+3. **Decision Making**: Go server analyzes data and determines required actions using centralized Casting System
+4. **Command Queuing**: Actions are placed in a server-side master queue prioritized by numerical values (1-100)
+5. **Action Execution**: Go server sends the next available command to the Lua addon and waits for completion
+6. **Game Execution**: Lua addon uses Ashita v4 command system to execute spells and actions immediately in the game client
+7. **Completion Reporting**: Lua addon notifies Go server of spell completion or failure to trigger the next queued command
 
 ## Components and Interfaces
 
@@ -78,22 +81,23 @@ graph TB
 
 #### Command Executor
 - Uses Ashita v4 ChatManager:QueueCommand to execute spells and actions
-- Parses simple text commands from Go server
-- Implements basic command queuing for sequential execution
+- Parses JSON commands from Go server
+- Executes commands immediately without local buffering
+- Reports completion or failure status back to Go server
 - Provides error reporting through Ashita v4 print functions
 
 ### Go Server Components
 
 #### Connection Manager
 - Accepts and manages multiple client connections
-- Handles JSON protocol parsing
+- Handles JSON protocol parsing and length-prefixed framing
 - Routes messages to appropriate processing components
 - Manages client state and connection health
 
 #### Text Parser
 - Analyzes incoming chat messages for trigger words
 - Maintains configurable trigger word dictionary
-- Maps trigger words to appropriate spell/action responses
+- Identifies trigger types and passes events to Casting System
 - Filters messages based on sender authorization
 
 #### Status Monitor
@@ -102,11 +106,17 @@ graph TB
 - Identifies critical health thresholds
 - Detects status effects requiring removal
 
-#### Spell Prioritizer
-- Evaluates multiple concurrent healing/buffing needs
-- Ranks actions by urgency and importance
-- Considers MP costs and casting efficiency
-- Manages action queuing and execution timing
+#### Casting System
+- Centralizes all spell selection and target resolution logic
+- Coordinates with Cure, Na, and Buff selectors
+- Manages sequence casting and self-targeting resolution
+- Provides prioritized requests to a Master Command Queue
+
+#### Master Command Queue (Server-Side)
+- Maintains a per-client queue of prioritized actions (1-100)
+- Enforces serial execution (one command at a time)
+- Handles command timeouts and re-processing upon completion/failure
+- Stores up to 100 commands per client
 
 #### Cure Selector
 - Calculates optimal cure spell level based on missing HP
@@ -129,36 +139,30 @@ graph TB
 
 ## Data Models
 
-### Simple Text Protocol
+### JSON Protocol
 
-The system uses a line-delimited text protocol with pipe-separated fields for maximum compatibility with Ashita v4 and minimal dependencies.
+The system uses a JSON-based protocol over TCP with a 4-byte big-endian length prefix for framing.
 
-**Message Format**: `MESSAGE_TYPE|field1|field2|...\n`
+**Message Format**: `[4-byte Length][JSON Body]`
 
-**Message Types**:
-- `PING` - Server heartbeat check
-- `PONG` - Client heartbeat response  
-- `COMMAND|spell_command` - Server to client spell execution
-- `CHAT|mode|sender|message` - Client to server chat forwarding
-- `STATUS|timestamp|player1:hp:mp|player2:hp:mp|...` - Client to server status update
-
-**Examples**:
-```
-PING
-PONG
-COMMAND|/ma "Cure IV" PlayerName
-CHAT|3|PlayerName|I am stoned
-STATUS|1640995200|Player1:75:100|Player2:45:80|Player3:90:60
-```
+**Common Message Types**:
+- `1 (TypePing)` - Heartbeat check
+- `2 (TypePong)` - Heartbeat response  
+- `10 (TypeExecuteCommand)` - Server to client command execution
+- `20 (TypeChatLine)` - Client to server chat forwarding
+- `21 (TypeStatusUpdate)` - Client to server status update
+- `31 (TypeSpellComplete)` - Client to server success notification
+- `32 (TypeSpellFailed)` - Client to server failure notification
 
 ### Action Commands
 
 ```go
 type ExecuteCommand struct {
-    Command  string `msgpack:"cmd"`     // "/ma \"Cure IV\" <t>"
-    Target   string `msgpack:"target"`  // Player name or <t>, <me>
-    Priority int    `msgpack:"pri"`     // Execution priority (1-10)
-    Timeout  int    `msgpack:"timeout"` // Max execution time (ms)
+    Command  string `json:"command"`  // "/ma \"Cure IV\" <t>"
+    Target   string `json:"target"`   // Player name or <t>, <me>
+    Priority int    `json:"priority"` // Execution priority (1-100)
+    Timeout  int    `json:"timeout"`  // Max execution time (ms)
+    ID       string `json:"id"`       // Unique command ID
 }
 ```
 
@@ -166,27 +170,24 @@ type ExecuteCommand struct {
 
 ```go
 type StatusUpdate struct {
-    Timestamp    int64          `msgpack:"ts"`
-    PartyMembers []PartyMember  `msgpack:"party"`
-    PlayerMP     int            `msgpack:"mp"`
-    PlayerHP     int            `msgpack:"hp"`
-    PlayerStatus []int          `msgpack:"player_status"` // Player's own status effects
-    Zone         string         `msgpack:"zone"`
+    Timestamp    int64          `json:"timestamp"`
+    PartyMembers []PartyMember  `json:"party_members"`
+    PlayerMP     int            `json:"player_mp"`
+    PlayerHP     int            `json:"player_hp"`
+    PlayerStatus []int          `json:"player_status"` // Player's own status effects
+    EchoDropCount int           `json:"echo_drop_count"`
+    Zone         string         `json:"zone"`
 }
 
 type PartyMember struct {
-    Name         string   `msgpack:"name"`
-    HPPercent    int      `msgpack:"hp_pct"`
-    MPPercent    int      `msgpack:"mp_pct"`
-    StatusEffects []int   `msgpack:"status"`
-    Job          string   `msgpack:"job"`
-    Distance     float32  `msgpack:"dist"`
-}
-
-type ItemCommand struct {
-    ItemName string `msgpack:"item"`     // "Echo Drop"
-    Target   string `msgpack:"target"`   // "<me>" for self-use items
-    Priority int    `msgpack:"pri"`      // Always highest priority (10) for silence removal
+    Name         string   `json:"name"`
+    HPPercent    int      `json:"hp_percent"`
+    MPPercent    int      `json:"mp_percent"`
+    HPActual     int      `json:"hp_actual"`
+    HPMax        int      `json:"hp_max"`
+    StatusEffects []int   `json:"status_effects"`
+    Job          string   `json:"job"`
+    Distance     float32  `json:"distance"`
 }
 ```
 
@@ -194,10 +195,10 @@ type ItemCommand struct {
 
 ```go
 type ChatLine struct {
-    Mode      uint32 `msgpack:"mode"`    // Chat channel type
-    Sender    string `msgpack:"sender"`  // Player name
-    Message   string `msgpack:"msg"`     // Chat content
-    Timestamp int64  `msgpack:"ts"`      // Message timestamp
+    Mode      uint32 `json:"mode"`      // Chat channel type
+    Sender    string `json:"sender"`    // Player name
+    Message   string `json:"message"`   // Chat content
+    Timestamp int64  `json:"timestamp"` // Message timestamp
 }
 ```
 
@@ -218,7 +219,24 @@ type Spell struct {
 }
 ```
 
-## Correctness Properties
+## Priority Management
+
+The system uses a standardized priority hierarchy (1-100) to ensure critical actions are always performed first. Higher numerical values indicate higher priority.
+
+| Priority Level | Numerical Value | Action Type | Examples |
+| :--- | :--- | :--- | :--- |
+| **Highest** | 100 | Self-Recovery | Echo Drop (Silence), Item Usage |
+| **Higher** | 80 | Critical Healing | Cure spells when HP <= 20% |
+| **High** | 60 | Vital Status Removal | Stona, Paralyna, Silena |
+| **Normal** | 40 | Routine Healing | Non-critical cures (HP > 20%) |
+| **Lowest** | 20 | Utility | Buffs, Shell, Protect, etc. |
+
+### Priority Execution Rules
+- **Serial Execution**: Only one command is sent to the client at a time. The server waits for a completion or failure report before sending the next highest priority command.
+- **Preemption**: If a new action with higher priority is queued while another is in progress, the higher priority action becomes the next in line.
+- **Queue Limit**: The Go server maintains a master queue of up to 100 commands per client, removing the oldest lowest priority actions if the limit is exceeded.
+- **Queue Garbage Collection (GC)**: The server periodically (and upon status updates) evaluates queued actions against the current game state. If an action's reason for existing is no longer valid (e.g., target already healed by another player or a curaga), the action is removed from the queue to prevent redundant or wasteful casting.
+- **Self-Recovery Preemption**: Detection of silence status on the player assigns a priority of 100 to Echo Drop usage, which may interrupt or delay any other queued casting operations.
 
 *A property is a characteristic or behavior that should hold true across all valid executions of a system-essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
 
@@ -227,7 +245,7 @@ type Spell struct {
 After reviewing all properties identified in the prework, several can be consolidated to eliminate redundancy:
 
 - Properties 5.2 and 5.3 (minor vs critical damage cure selection) can be combined into Property 5.1 (optimal cure level calculation)
-- Properties 4.2, 4.3, and 4.4 (various prioritization scenarios) can be combined into Property 4.1 (general prioritization ranking)
+- Properties 4.2, 4.3, 4.4, and 4.6 (various prioritization scenarios) can be combined into Property 4.1 (general prioritization ranking)
 - Properties 1.1 and 1.2 (command execution and parsing) can be combined since parsing is part of execution
 - Properties 3.3 and 3.4 (cure and na spell determination) are already covered by Properties 5.1 and 6.1 respectively
 
@@ -242,8 +260,8 @@ Property 2: Error handling for malformed commands
 **Validates: Requirements 1.3**
 
 Property 3: Command queue management
-*For any* sequence of Action_Commands received by the Lua_Plugin, they should be executed in priority order, with higher priority commands (like critical heals) preempting lower priority commands (like buffs)
-**Validates: Requirements 1.4**
+*For any* sequence of Action_Commands received by the Go_Server, they should be queued and sent in priority order (1-100), with higher priority commands (like critical heals) being sent before lower priority commands (like buffs)
+**Validates: Requirements 1.4, 4.1**
 
 Property 4: Error reporting
 *For any* Action_Command that fails to execute, the Lua_Plugin should report the failure status back to the Go_Server
@@ -254,8 +272,8 @@ Property 5: Message forwarding
 **Validates: Requirements 2.1**
 
 Property 6: Multi-trigger prioritization
-*For any* chat message containing multiple trigger words, the Spell_Prioritizer should determine an optimal casting sequence based on urgency and importance
-**Validates: Requirements 2.4**
+*For any* chat message containing multiple trigger words, the Casting System should determine an optimal casting sequence based on urgency and importance
+**Validates: Requirements 2.4, 8.5**
 
 Property 7: Unauthorized player filtering
 *For any* trigger word detected from an unknown or unauthorized player, the Go_Server should ignore the request and log the event without taking action
@@ -274,8 +292,8 @@ Property 10: Connection monitoring and recovery
 **Validates: Requirements 3.5**
 
 Property 11: Action prioritization ranking
-*For any* set of multiple concurrent healing, buffing, or status removal needs, the Spell_Prioritizer should rank actions by urgency (critical health > buffs) and importance (role-based priority)
-**Validates: Requirements 4.1, 4.2, 4.3, 4.4**
+*For any* set of multiple concurrent healing, buffing, or status removal needs, the Casting System should rank actions by urgency (1-100 scale) and importance
+**Validates: Requirements 4.1, 4.2, 4.3, 4.4, 4.6**
 
 Property 12: Resource optimization
 *For any* scenario where spell casting resources (MP) are limited, the Spell_Prioritizer should optimize MP usage and casting efficiency while maintaining healing effectiveness
@@ -385,9 +403,9 @@ Property 38: Casting queue interruption for silence
 *For any* active casting queue when the silence status effect is detected on the player, the Go_Server should interrupt the current queue to prioritize echo drop usage
 **Validates: Requirements 10.4**
 
-Property 39: Normal operations resumption after silence removal
-*For any* successful echo drop usage that removes silence, the Go_Server should resume normal spell casting operations and update its internal status tracking
-**Validates: Requirements 10.5**
+Property 40: Queue Garbage Collection
+*For any* queued Action_Command, the Go_Server should remove it if the underlying game state condition (e.g., low HP, status effect) is no longer present
+**Validates: Requirements 1.9**
 
 ## Error Handling
 

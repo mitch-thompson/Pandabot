@@ -41,7 +41,7 @@ func TestProperty26_ServerSideCommandQueuing(t *testing.T) {
 
 			maxPriority := 0
 			for j := 0; j < numCommands; j++ {
-				priority := rand.Intn(10) + 1 // Priority 1-10
+				priority := rand.Intn(100) + 1 // Priority 1-100
 				commands[j] = struct {
 					command  string
 					priority int
@@ -376,6 +376,82 @@ func TestSpellFailureFeedback(t *testing.T) {
 		}
 	}
 	client.queueMutex.RUnlock()
+}
+
+func TestQueueGC(t *testing.T) {
+	config := DefaultConfig()
+	server := NewServer(config)
+
+	client := &Client{
+		conn:         &mockConn{},
+		reader:       bufio.NewReader(&mockConn{}),
+		writer:       bufio.NewWriter(&mockConn{}),
+		lastSeen:     time.Now(),
+		commandQueue: make([]*QueuedCommand, 0),
+	}
+
+	// Setup status monitor with a member
+	server.statusMonitor.UpdatePartyMemberWithMaxValues("Player1", 50, 100, 500, 1000, 1000, 1000, 1, 0, []int{})
+
+	// Queue some commands
+	server.queueCommandForClient(client, "/ma \"Cure IV\" \"Player1\"", "Player1", 80)
+	server.queueCommandForClient(client, "/ma \"Haste\" \"Player1\"", "Player1", 20)
+	server.queueCommandForClient(client, "/ma \"Cure II\" \"Player2\"", "Player2", 40) // Player2 not in party
+
+	// Initially we should have 3 commands (1 in progress, 2 in queue)
+	client.queueMutex.RLock()
+	total := len(client.commandQueue)
+	if client.currentCommand != nil {
+		total++
+	}
+	if total != 3 {
+		t.Errorf("Expected 3 total commands, got %d", total)
+	}
+	client.queueMutex.RUnlock()
+
+	// Update Player1 health to 100%
+	server.statusMonitor.UpdatePartyMemberWithMaxValues("Player1", 100, 100, 1000, 1000, 1000, 1000, 1, 0, []int{})
+
+	// Run GC
+	server.validateQueuedActions(client)
+
+	// After GC:
+	// - Cure IV for Player1 should be removed (HP > 90%)
+	// - Haste for Player1 should be KEPT (we don't GC buffs yet)
+	// - Cure II for Player2 should be removed (Player2 not in party)
+	client.queueMutex.RLock()
+	// currentCommand is NOT removed by GC currently (it's already sent)
+	// so we check the queue
+	for _, cmd := range client.commandQueue {
+		if strings.Contains(cmd.Command, "Cure") {
+			t.Errorf("Unnecessary cure command %s remained in queue", cmd.Command)
+		}
+	}
+	client.queueMutex.RUnlock()
+}
+
+func TestMaxQueueSize(t *testing.T) {
+	config := DefaultConfig()
+	server := NewServer(config)
+
+	client := &Client{
+		conn:         &mockConn{},
+		reader:       bufio.NewReader(&mockConn{}),
+		writer:       bufio.NewWriter(&mockConn{}),
+		lastSeen:     time.Now(),
+		commandQueue: make([]*QueuedCommand, 0),
+	}
+
+	// Queue more than MaxCommandQueueSize commands
+	for i := 0; i < MaxCommandQueueSize+10; i++ {
+		server.queueCommandForClient(client, "/ma \"Cure\" \"Player1\"", "Player1", 10)
+	}
+
+	client.queueMutex.RLock()
+	defer client.queueMutex.RUnlock()
+	if len(client.commandQueue) > MaxCommandQueueSize {
+		t.Errorf("Queue size %d exceeds maximum %d", len(client.commandQueue), MaxCommandQueueSize)
+	}
 }
 
 // Helper function to generate random commands for testing

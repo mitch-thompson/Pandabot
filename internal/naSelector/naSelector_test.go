@@ -160,6 +160,19 @@ func TestStatusEffectPrioritization(t *testing.T) {
 // Validates: Requirements 6.3
 
 func TestStatusRemovalCommandGeneration(t *testing.T) {
+	t.Run("Reproduction_PlagueSelection", func(t *testing.T) {
+		ns := NewNaSpellSelector()
+		statusEffects := []int{31} // Plague
+		availableMP := 100
+		bestSpell, err := ns.SelectOptimalNaSpell(statusEffects, availableMP)
+		if err != nil {
+			t.Fatalf("Failed to select na spell for Plague (ID 31): %v", err)
+		}
+		if bestSpell.SpellName != "Viruna" {
+			t.Errorf("Expected Viruna for Plague, got %s", bestSpell.SpellName)
+		}
+	})
+
 	for i := 0; i < 100; i++ {
 		t.Run("PropertyTest_StatusRemovalCommandGeneration", func(t *testing.T) {
 			selector := NewNaSpellSelector()

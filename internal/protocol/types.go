@@ -27,11 +27,12 @@ type Message struct {
 
 // ExecuteCommand represents a command sent from server to client
 type ExecuteCommand struct {
-	Command  string `json:"command"`  // "/ma \"Cure IV\" <t>"
-	Target   string `json:"target"`   // Player name or <t>, <me>
-	Priority int    `json:"priority"` // Execution priority (1-10)
-	Timeout  int    `json:"timeout"`  // Max execution time (ms)
-	ID       string `json:"id"`       // Unique command ID for tracking
+	Command   string `json:"command"`   // "/ma \"Cure IV\" <t>"
+	Target    string `json:"target"`    // Player name or <t>, <me>
+	Priority  int    `json:"priority"`  // Execution priority (1-100)
+	Timeout   int    `json:"timeout"`   // Max execution time (ms)
+	ID        string `json:"id"`        // Unique command ID for tracking
+	Timestamp int64  `json:"timestamp"` // When the action was first queued
 }
 
 // ChatLine represents a chat message from client to server
@@ -173,12 +174,12 @@ func ValidateStatusUpdate(body any) error {
 		return fmt.Errorf("timestamp must be positive")
 	}
 
-	if status.PlayerHP < 0 || status.PlayerHP > 100 {
-		return fmt.Errorf("player HP percent must be between 0 and 100, got %d", status.PlayerHP)
+	if status.PlayerHP < 0 {
+		return fmt.Errorf("player HP cannot be negative, got %d", status.PlayerHP)
 	}
 
-	if status.PlayerMP < 0 || status.PlayerMP > 100 {
-		return fmt.Errorf("player MP percent must be between 0 and 100, got %d", status.PlayerMP)
+	if status.PlayerMP < 0 {
+		return fmt.Errorf("player MP cannot be negative, got %d", status.PlayerMP)
 	}
 
 	for i, member := range status.PartyMembers {
