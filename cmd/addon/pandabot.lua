@@ -9,7 +9,7 @@ addon.description = "Automated gameplay assistant for Ashita v4"
 local config = {
 	host = "127.0.0.1",
 	port = 31337,
-	status_update_interval = 5000, -- 5 seconds
+	status_update_interval = 1000, -- 1 seconds
 	connection_timeout = 2, -- 2 seconds
 	max_reconnect_attempts = 10,
 	base_reconnect_delay = 1000, -- 1 second
@@ -25,12 +25,25 @@ require('struct')
 
 -- Simple JSON encoder/decoder for Ashita v4 compatibility
 local json = {}
+local last_player_pos = { x = 0, y = 0, z = 0 }
+local last_position_update = 0
+local movement_check_interval = 200  -- Check every ~200ms (adjust if needed)
+local last_command_time = 0
+local command_buffer_time = 2000 -- 1 second buffer after sending a command
+local recv_buffer = ""
+local last_ready_sent = 0
+local current_action = {
+	id = nil,
+	command = nil,
+	start_time = 0,
+	is_casting = false
+}
 
 function json.encode(obj)
 	local function encode_value(val)
 		local val_type = type(val)
 		if val_type == "string" then
-			-- More comprehensive string escaping for JSON safety
+		-- More comprehensive string escaping for JSON safety
 			local escaped = val:gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t')
 			-- Escape other control characters that might cause JSON parsing issues
 			escaped = escaped:gsub('[\1-\31\127-\255]', function(c)
@@ -93,7 +106,7 @@ function json.decode(str)
 		local char = str:sub(pos, pos)
 
 		if char == '"' then
-			-- String
+		-- String
 			pos = pos + 1
 			local start = pos
 			while pos <= #str do
@@ -110,7 +123,7 @@ function json.decode(str)
 			end
 			error("Unterminated string")
 		elseif char == '{' then
-			-- Object
+		-- Object
 			pos = pos + 1
 			local result = {}
 			skip_whitespace()
@@ -146,7 +159,7 @@ function json.decode(str)
 				end
 			end
 		elseif char == '[' then
-			-- Array
+		-- Array
 			pos = pos + 1
 			local result = {}
 			skip_whitespace()
@@ -175,7 +188,7 @@ function json.decode(str)
 				end
 			end
 		elseif char:match("[%d%-]") then
-			-- Number
+		-- Number
 			local start = pos
 			if char == '-' then
 				pos = pos + 1
@@ -271,7 +284,7 @@ end
 
 local function send(msg)
 	if not sock or not connected then
-		-- Queue message for later transmission
+	-- Queue message for later transmission
 		table.insert(message_queue, msg)
 		if #message_queue > config.max_message_queue_size then -- Limit queue size
 			table.remove(message_queue, 1) -- Remove oldest message
@@ -306,7 +319,7 @@ local function send_queued_messages()
 	while #message_queue > 0 and connected do
 		local msg = table.remove(message_queue, 1)
 		if not send(msg) then
-			-- If send fails, put message back at front of queue
+		-- If send fails, put message back at front of queue
 			table.insert(message_queue, 1, msg)
 			break
 		end
@@ -359,6 +372,9 @@ local function attempt_reconnect()
 		}
 		send(ping_msg)
 
+		-- Send initial ready signal
+		send_ready_for_action()
+
 		-- Send queued messages
 		send_queued_messages()
 	else
@@ -370,7 +386,7 @@ end
 -- Ashita v4 load event
 ----------------------------------------------------------------------------------------------------
 ashita.events.register('load', 'pandabot_load', function()
-	-- Verify Ashita v4 APIs are available
+-- Verify Ashita v4 APIs are available
 	if not AshitaCore then
 		print('[PandaBot] AshitaCore not available - addon cannot function')
 		return
@@ -426,6 +442,9 @@ ashita.events.register('load', 'pandabot_load', function()
 		}
 		send(ping_msg)
 
+		-- Send initial ready signal after successful connection
+		send_ready_for_action()
+
 		connected = true
 		reconnect_attempts = 0 -- Reset reconnect counter on successful connection
 	end)
@@ -451,6 +470,41 @@ local function hexdump(str, start, len)
 end
 
 ashita.events.register('packet_in', 'pandabot_packet', function(e)
+-- Action packet
+	if e.id == 0x028 then
+		local p = e.data
+		-- Offset 5: Category
+		-- Category 4: Finish Spell Casting
+		-- Category 8: Use Ability
+		-- Category 6: Use Weapon Skill
+		-- Offset 6: Actor ID (Server ID)
+		local actor_id = struct.unpack('I', p, 5 + 1)
+		local category = bit.band(bit.rshift(struct.unpack('H', p, 10 + 1), 2), 0x0F)
+
+		local player_id = AshitaCore:GetMemoryManager():GetParty():GetMemberServerId(0)
+
+		if actor_id == player_id then
+			debug_log(string.format('Action packet: category=%d', category))
+			if category == 4 or category == 8 or category == 6 then
+			-- Action completed
+				if current_action.id then
+					debug_log(string.format('Detected action completion via packet 0x028: %s', current_action.id))
+					ashita.tasks.once(0.5, function() send_spell_completion(current_action.id) end)
+					current_action.id = nil
+					current_action.is_casting = false
+				end
+			elseif category == 11 then
+			-- Action failed / interrupted
+				if current_action.id then
+					debug_log(string.format('Detected action failure via packet 0x028: %s', current_action.id))
+					ashita.tasks.once(0.5, function() send_spell_failure(current_action.id, "Action interrupted or failed") end)
+					current_action.id = nil
+					current_action.is_casting = false
+				end
+			end
+		end
+	end
+
 	if e.id ~= 0x076 then
 		return
 	end
@@ -481,69 +535,61 @@ ashita.events.register('packet_in', 'pandabot_packet', function(e)
 
 		local entity_index = struct.unpack('H', p, entity_index_offset)
 
-		if entity_index == 0 or entity_index == nil then
-			goto continue
-		end
-
+		if entity_index ~= 0 and entity_index ~= nil then
 		-- Get the character name using entity index
-		local char_name = entity:GetName(entity_index)
+			local char_name = entity:GetName(entity_index)
 
-		if not char_name or char_name == "" then
-			goto continue
-		end
+			if char_name and char_name ~= "" then
+			-- Find which party member index this entity corresponds to
+				local party_member_index = nil
+				for i = 0, 17 do
+					local target_idx = party:GetMemberTargetIndex(i)
+					if target_idx == entity_index then
+						party_member_index = i
+						break
+					end
+				end
 
-		-- Find which party member index this entity corresponds to
-		local party_member_index = nil
-		for i = 0, 17 do
-			local target_idx = party:GetMemberTargetIndex(i)
-			if target_idx == entity_index then
-				party_member_index = i
-				break
-			end
-		end
+				if party_member_index then
+				-- Extract buffs using CurePlease's method
+					local buffs = {}
+					for i = 1, 32 do
+					-- This formula extracts 10-bit buff IDs from the compressed format
+					-- Low 8 bits from one location, high 2 bits from bitmask
+						local buff_byte_offset = k * 48 + 5 + 16 + i - 1
+						local bitmask_offset = k * 48 + 5 + 8 + math.floor((i - 1) / 4)
 
-		if not party_member_index then
-			goto continue
-		end
+						if buff_byte_offset < plen and bitmask_offset < plen then
+							local low_bits = p:byte(buff_byte_offset)  -- REMOVED + 1
+							local bitmask_byte = p:byte(bitmask_offset)  -- REMOVED + 1
+							local high_bits = math.floor(bitmask_byte / (4 ^ ((i - 1) % 4))) % 4
 
-		-- Extract buffs using CurePlease's method
-		local buffs = {}
-		for i = 1, 32 do
-		-- This formula extracts 10-bit buff IDs from the compressed format
-		-- Low 8 bits from one location, high 2 bits from bitmask
-			local buff_byte_offset = k * 48 + 5 + 16 + i - 1
-			local bitmask_offset = k * 48 + 5 + 8 + math.floor((i - 1) / 4)
+							local current_buff = low_bits + (high_bits * 256)
 
-			if buff_byte_offset < plen and bitmask_offset < plen then
-				local low_bits = p:byte(buff_byte_offset)  -- REMOVED + 1
-				local bitmask_byte = p:byte(bitmask_offset)  -- REMOVED + 1
-				local high_bits = math.floor(bitmask_byte / (4 ^ ((i - 1) % 4))) % 4
+							if current_buff ~= 255 and current_buff ~= 0 then
+								table.insert(buffs, current_buff)
+							end
+						end
+					end
 
-				local current_buff = low_bits + (high_bits * 256)
+					-- Store buffs for this party member
+					party_statuses[party_member_index] = buffs
 
-				if current_buff ~= 255 and current_buff ~= 0 then
-					table.insert(buffs, current_buff)
+					if config.debug_mode and char_name then
+					-- Show raw buff bytes before extraction
+						local raw_buff_str = ""
+						for i = 1, 32 do
+							local buff_byte_offset = k * 48 + 5 + 16 + i - 1
+							if buff_byte_offset < plen then
+								raw_buff_str = raw_buff_str .. string.format("%02X ", p:byte(buff_byte_offset + 1))
+							end
+						end
+						debug_log(string.format('Member %d raw buff bytes: %s', party_member_index, raw_buff_str))
+					end
 				end
 			end
 		end
-
-		-- Store buffs for this party member
-		party_statuses[party_member_index] = buffs
-
-		if config.debug_mode and char_name then
-		-- Show raw buff bytes before extraction
-			local raw_buff_str = ""
-			for i = 1, 32 do
-				local buff_byte_offset = k * 48 + 5 + 16 + i - 1
-				if buff_byte_offset < plen then
-					raw_buff_str = raw_buff_str .. string.format("%02X ", p:byte(buff_byte_offset + 1))
-				end
-			end
-			debug_log(string.format('Member %d raw buff bytes: %s', party_member_index, raw_buff_str))
-		end
-
-		::continue::
-end
+	end
 end)
 
 
@@ -604,7 +650,7 @@ function handle_command(e)
 					end
 
 					print(COLOR_CYAN .. '[PandaBot] ' .. COLOR_DEFAULT ..
-						string.format('  [%d] %s: HP=%d%%, MP=%d%%, Status=[%s]',
+					string.format('  [%d] %s: HP=%d%%, MP=%d%%, Status=[%s]',
 						i, member_name, hp_percent, mp_percent, status_str))
 				end
 			end
@@ -679,7 +725,7 @@ end
 local last_status_update = 0
 
 ashita.events.register('d3d_present', 'pandabot_present', function()
-	-- Handle reconnection if disconnected
+-- Handle reconnection if disconnected
 	if not connected then
 		attempt_reconnect()
 		return
@@ -692,6 +738,11 @@ ashita.events.register('d3d_present', 'pandabot_present', function()
 			send_status_update()
 			last_status_update = current_time
 		end
+	end
+
+	-- Send ready if idle and cooldown passed
+	if connected and not current_action.is_casting and (now_ms() - last_ready_sent > 500) then
+		send_ready_for_action()
 	end
 
 	-- Check for incoming messages from server
@@ -772,53 +823,50 @@ function send_status_update()
 					local zone = party:GetMemberZone(i) or 0
 					local player_zone = party:GetMemberZone(0) or 0
 
-					-- Skip if not in same zone (critical for clearing old trusts after zoning/dismiss)
-					if zone ~= player_zone then
+					-- Only process if in same zone and HP > 0
+					if zone == player_zone then
+						local hp_percent = party:GetMemberHPPercent(i) or 0
+						if hp_percent > 0 then
+							local hp_actual = party:GetMemberHP(i) or 0
+							local mp_actual = party:GetMemberMP(i) or 0
+
+							local hp_max = (hp_percent > 0) and math.floor(hp_actual * 100 / hp_percent + 0.5) or 0
+							local mp_percent = party:GetMemberMPPercent(i) or 0
+							local mp_max = (mp_percent > 0) and math.floor(mp_actual * 100 / mp_percent + 0.5) or 0
+
+							local status_effects = get_member_status_effects(i)
+
+							local main_job = party:GetMemberMainJob(i) or 0
+
+							local distance = 0
+							local target_index = party:GetMemberTargetIndex(i)
+							if target_index and target_index > 0 then
+								distance = entity:GetDistance(target_index) or 0
+							end
+
+							table.insert(party_members, {
+								name = member_name,
+								index = i,  -- optional: include slot index for debugging
+								hp_percent = hp_percent,
+								mp_percent = mp_percent,
+								hp_actual = hp_actual,
+								hp_max = hp_max,
+								mp_actual = mp_actual,
+								mp_max = mp_max,
+								status_effects = status_effects,
+								job = main_job,
+								distance = distance,
+								zone = zone,
+								last_update = os.time()
+							})
+						else
+							debug_log(string.format('Skipping member %d (%s) - HP%% <= 0', i, member_name))
+						end
+					else
 						debug_log(string.format('Skipping member %d (%s) - different zone (%d vs %d)', i, member_name, zone, player_zone))
-						goto continue
 					end
-
-					local hp_percent = party:GetMemberHPPercent(i) or 0
-					if hp_percent <= 0 then
-						debug_log(string.format('Skipping member %d (%s) - HP%% <= 0', i, member_name))
-						goto continue
-					end
-
-					local hp_actual = party:GetMemberHP(i) or 0
-					local mp_actual = party:GetMemberMP(i) or 0
-
-					local hp_max = (hp_percent > 0) and math.floor(hp_actual * 100 / hp_percent + 0.5) or 0
-					local mp_percent = party:GetMemberMPPercent(i) or 0
-					local mp_max = (mp_percent > 0) and math.floor(mp_actual * 100 / mp_percent + 0.5) or 0
-
-					local status_effects = get_member_status_effects(i)
-
-					local main_job = party:GetMemberMainJob(i) or 0
-
-					local distance = 0
-					local target_index = party:GetMemberTargetIndex(i)
-					if target_index and target_index > 0 then
-						distance = entity:GetDistance(target_index) or 0
-					end
-
-					table.insert(party_members, {
-						name = member_name,
-						index = i,  -- optional: include slot index for debugging
-						hp_percent = hp_percent,
-						mp_percent = mp_percent,
-						hp_actual = hp_actual,
-						hp_max = hp_max,
-						mp_actual = mp_actual,
-						mp_max = mp_max,
-						status_effects = status_effects,
-						job = main_job,
-						distance = distance,
-						zone = zone,
-						last_update = os.time()
-					})
 				end
 			end
-			::continue::
 		end
 
 		-- Get player info using v4 methods (player is always index 0)
@@ -885,7 +933,7 @@ function receive_messages()
 	end
 
 	local success, err = pcall(function()
-		-- Set socket to non-blocking to avoid freezing the game
+	-- Set socket to non-blocking to avoid freezing the game
 		sock:settimeout(0)
 
 		-- Try to read length prefix (4 bytes)
@@ -948,6 +996,9 @@ function handle_server_message(message)
 		print(COLOR_CYAN .. '[PandaBot] ' .. COLOR_DEFAULT .. 'Received pong from server')
 	elseif msg_type == 10 then -- TypeExecuteCommand
 		handle_execute_command(message.body)
+	elseif msg_type == 40 then -- TypeReadyToCast (Deprecated)
+	-- Server no longer polls, but we'll respond just in case of version mismatch
+		handle_ready_to_cast_check(message.body)
 	else
 		print(COLOR_RED .. '[PandaBot Error] ' .. COLOR_DEFAULT .. 'Unknown message type: ' .. msg_type)
 	end
@@ -975,6 +1026,122 @@ function handle_execute_command(command_data)
 end
 
 ----------------------------------------------------------------------------------------------------
+-- Handle ready to cast check from server
+----------------------------------------------------------------------------------------------------
+function handle_ready_to_cast_check(check_data)
+	if not check_data or not check_data.command_id then
+		return
+	end
+
+	local command_id = check_data.command_id
+	local is_ready = true
+	local reason = ""
+
+	-- Update player position periodically (in d3d_present or here is fine, but here avoids extra globals)
+	local current_time = now_ms()
+	if current_time - last_position_update >= movement_check_interval then
+		local entity_mgr = AshitaCore:GetMemoryManager():GetEntity()
+		local player_index = party:GetMemberTargetIndex(0)
+		if player_index and player_index > 0 then
+			local current_x = entity_mgr:GetLocalPositionX(player_index) or 0
+			local current_y = entity_mgr:GetLocalPositionY(player_index) or 0
+			local current_z = entity_mgr:GetLocalPositionZ(player_index) or 0
+
+			-- Small threshold for floating-point jitter
+			if math.abs(current_x - last_player_pos.x) > 0.01 or
+			math.abs(current_y - last_player_pos.y) > 0.01 or
+			math.abs(current_z - last_player_pos.z) > 0.01 then
+				last_player_pos = { x = current_x, y = current_y, z = current_z }
+			end
+
+			last_position_update = current_time
+		end
+	end
+
+	-- Check if player is casting (via status effect buff - reliable)
+	local is_casting = false
+	local player_buffs = AshitaCore:GetMemoryManager():GetPlayer():GetBuffs()
+	if player_buffs then
+		for _, buff_id in ipairs(player_buffs) do
+			if buff_id == 2 or buff_id == 173 then  -- 2 = spell casting, 173 = ability/WS
+				is_casting = true
+				break
+			end
+		end
+	end
+
+	if current_action.is_casting then
+	-- Double check with memory if we think we are casting but memory says no
+		local player_buffs = AshitaCore:GetMemoryManager():GetPlayer():GetBuffs()
+		local memory_says_busy = false
+		if player_buffs then
+			for _, buff_id in ipairs(player_buffs) do
+				if buff_id == 2 or buff_id == 173 then
+					memory_says_busy = true
+					break
+				end
+			end
+		end
+
+		-- If 10 seconds passed, assume something went wrong and we are not casting anymore
+		if current_time - current_action.start_time > 10000 then
+			debug_log('Force clearing current_action after 10s timeout')
+			current_action.is_casting = false
+			current_action.id = nil
+		elseif memory_says_busy then
+			is_casting = true
+		else
+		-- Memory says we are not busy, but we thought we were.
+		-- Give it 2 seconds to definitely register the start of casting
+			if current_time - current_action.start_time > 2000 then
+				debug_log('Memory says not casting, clearing current_action after 2s grace period')
+				current_action.is_casting = false
+				current_action.id = nil
+			else
+				is_casting = true
+			end
+		end
+	end
+
+	-- Detect moving by position change
+	local is_moving = false
+	local entity_mgr = AshitaCore:GetMemoryManager():GetEntity()
+	local player_index = party:GetMemberTargetIndex(0)
+	if player_index and player_index > 0 then
+		local current_x = entity_mgr:GetLocalPositionX(player_index) or 0
+		local current_y = entity_mgr:GetLocalPositionY(player_index) or 0
+		local current_z = entity_mgr:GetLocalPositionZ(player_index) or 0
+
+		if math.abs(current_x - last_player_pos.x) > 0.05 or
+		math.abs(current_y - last_player_pos.y) > 0.05 or
+		math.abs(current_z - last_player_pos.z) > 0.05 then
+			is_moving = true
+		end
+	end
+
+	if is_casting then
+		is_ready = false
+		reason = "casting"
+	elseif is_moving then
+		is_ready = false
+		reason = "moving"
+	elseif current_time - last_command_time < command_buffer_time then
+		is_ready = false
+		reason = "busy (recently sent command)"
+	end
+
+	local response = {
+		type = 41, -- TypeReadyResponse
+		body = {
+			command_id = command_id,
+			is_ready = is_ready,
+			reason = reason
+		}
+	}
+	send(response)
+end
+
+----------------------------------------------------------------------------------------------------
 -- Execute command using Ashita v4 command injection
 ----------------------------------------------------------------------------------------------------
 function execute_command(command, command_id)
@@ -982,27 +1149,35 @@ function execute_command(command, command_id)
 		return false
 	end
 
+	last_command_time = now_ms()
+
+	-- Track current action
+	current_action.id = command_id
+	current_action.command = command
+	current_action.start_time = last_command_time
+	current_action.is_casting = true
+
 	local success, err = pcall(function()
-		-- Use Ashita v4 command system
+	-- Use Ashita v4 command system
 		ashita_chat:QueueCommand(1, command)
-		
+
 		-- Send spell completion notification after a short delay
 		-- In a real implementation, this would be triggered by actual spell completion events
 		-- For now, we'll simulate completion after command execution
 		if command_id then
-			-- Schedule completion notification
+		-- Schedule completion notification
 			schedule_spell_completion(command_id, command)
 		end
 	end)
 
 	if not success then
 		print(COLOR_RED .. '[PandaBot Error] ' .. COLOR_DEFAULT .. 'Failed to execute command: ' .. tostring(err))
-		
+
 		-- Send failure notification
 		if command_id then
 			send_spell_failure(command_id, tostring(err))
 		end
-		
+
 		return false
 	end
 
@@ -1015,55 +1190,55 @@ end
 local pending_spells = {}
 
 function schedule_spell_completion(command_id, command)
-	-- Store the spell for completion tracking
+-- Store the spell for completion tracking
 	pending_spells[command_id] = {
 		command = command,
 		start_time = now_ms(),
 		timeout = 10000 -- 10 second timeout for spell completion
 	}
-	
+
 	debug_log('Scheduled completion tracking for command: ' .. command_id .. ' (' .. command .. ')')
+end
+
+function send_ready_for_action()
+	if not connected then return end
+	local msg = {
+		type = 42,
+		body = {
+			last_command_id = current_action.last_id or "",
+			last_status = current_action.last_status or "idle",
+			timestamp = now_ms()
+		}
+	}
+	send(msg)
+	last_ready_sent = now_ms()
+	debug_log("Sent ready for action")
 end
 
 ----------------------------------------------------------------------------------------------------
 -- Send spell completion notification
 ----------------------------------------------------------------------------------------------------
 function send_spell_completion(command_id)
-	if not connected then
-		return
-	end
-	
-	local completion_msg = {
-		type = 31, -- TypeSpellComplete
-		body = {
-			command_id = command_id,
-			timestamp = os.time()
-		}
-	}
-	
-	send(completion_msg)
-	debug_log('Sent spell completion for command: ' .. command_id)
+	if not connected then return end
+	local msg = { type = 31, body = { command_id = command_id, timestamp = os.time() } }
+	send(msg)
+	--debug_log('Sent completion: ' .. command_id)
+	current_action.is_casting = false
+	current_action.id = nil
+	send_ready_for_action()
 end
 
 ----------------------------------------------------------------------------------------------------
 -- Send spell failure notification
 ----------------------------------------------------------------------------------------------------
-function send_spell_failure(command_id, error_message)
-	if not connected then
-		return
-	end
-	
-	local failure_msg = {
-		type = 32, -- TypeSpellFailed
-		body = {
-			command_id = command_id,
-			error = error_message,
-			timestamp = os.time()
-		}
-	}
-	
-	send(failure_msg)
-	debug_log('Sent spell failure for command: ' .. command_id .. ' (error: ' .. error_message .. ')')
+function send_spell_failure(command_id, error_msg)
+	if not connected then return end
+	local msg = { type = 32, body = { command_id = command_id, error = error_msg, timestamp = os.time() } }
+	send(msg)
+	debug_log('Sent failure: ' .. command_id)
+	current_action.is_casting = false
+	current_action.id = nil
+	send_ready_for_action()
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -1071,20 +1246,58 @@ end
 ----------------------------------------------------------------------------------------------------
 function process_pending_spells()
 	local current_time = now_ms()
-	
+
 	for command_id, spell_data in pairs(pending_spells) do
 		local elapsed = current_time - spell_data.start_time
-		
-		-- For now, simulate spell completion after 3 seconds
-		-- In a real implementation, this would be based on actual game events
-		if elapsed >= 3000 then -- 3 seconds
-			send_spell_completion(command_id)
-			pending_spells[command_id] = nil
-		elseif elapsed >= spell_data.timeout then
-			-- Timeout - send failure
+
+		-- Use packet-based completion primarily, but keep a timeout fallback
+		if elapsed >= spell_data.timeout then
+		-- Timeout - send failure
 			send_spell_failure(command_id, "Spell casting timed out")
 			pending_spells[command_id] = nil
+			if current_action.id == command_id then
+				current_action.id = nil
+				current_action.is_casting = false
+			end
 		end
+	end
+end
+
+local function process_network()
+	if not connected or not sock then return end
+
+	sock:settimeout(0)
+	local data, err, partial = sock:receive(4096)
+	if data then
+		recv_buffer = recv_buffer .. data
+	elseif partial and #partial > 0 then
+		recv_buffer = recv_buffer .. partial
+	elseif err and err ~= "timeout" then
+		print('[PandaBot] Connection lost: ' .. err)
+		connected = false
+		sock:close()
+		sock = nil
+		return
+	end
+
+	-- Process complete lines
+	local nl = recv_buffer:find("\n")
+	while nl do
+		local line = recv_buffer:sub(1, nl-1)
+		recv_buffer = recv_buffer:sub(nl+1)
+
+		local json_part = line:match("|(.+)") or line
+		local ok, msg = pcall(json.decode, json_part)
+		if ok and msg and msg.type then
+			if msg.type == 10 then  -- ExecuteCommand
+				local cmd = msg.body.command
+				local id = msg.body.id or ""
+				execute_command(cmd, id)
+			end
+		-- Add other handlers here (e.g., status request, etc.)
+		end
+
+		nl = recv_buffer:find("\n")
 	end
 end
 

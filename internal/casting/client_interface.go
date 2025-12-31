@@ -9,12 +9,23 @@ import (
 type ClientInterface interface {
 	// SendSpellCommand sends a spell casting command to the client
 	SendSpellCommand(command *SpellCommand) error
-	
+
 	// GetClientInfo returns information about the client's current state
 	GetClientInfo() *ClientInfo
-	
+
 	// IsConnected returns whether the client is currently connected
 	IsConnected() bool
+
+	// CheckReadyToCast asks the client if it's ready to cast a spell
+	CheckReadyToCast(commandID string) (bool, string, error)
+
+	// WaitForReadyForAction blocks until the client signals it is ready for an action
+	WaitForReadyForAction(timeout time.Duration) error
+
+	// LockExecution locks the client for command execution (CheckReady + Send)
+	LockExecution()
+	// UnlockExecution unlocks the client
+	UnlockExecution()
 }
 
 // SpellCommand represents a spell casting command to send to a client
@@ -83,21 +94,36 @@ func (cm *ClientManager) ExecuteCastRequest(request *CastRequest) error {
 	if err != nil {
 		return err
 	}
-	
+
+	// Wait for client to be ready for action
+	timeout := 10 * time.Second
+	if request.Timeout > 0 {
+		timeout = request.Timeout
+	}
+
+	err = client.WaitForReadyForAction(timeout)
+	if err != nil {
+		return fmt.Errorf("client not ready for action within timeout: %v", err)
+	}
+
+	// Lock the client for execution to prevent multiple commands being sent at once
+	client.LockExecution()
+	defer client.UnlockExecution()
+
 	// Get client info to determine caster name for target resolution
 	clientInfo := client.GetClientInfo()
-	
+
 	// Update request context with caster name if not already set
 	if request.Context != nil && request.Context.CasterName == "" {
 		request.Context.CasterName = clientInfo.PlayerName
 	}
-	
+
 	// Resolve the correct target for this spell using the casting engine
 	resolvedTarget, err := cm.engine.resolveSpellTarget(request.SpellName, request.Target, request.Context)
 	if err != nil {
 		return fmt.Errorf("failed to resolve target: %v", err)
 	}
-	
+
 	// Create spell command with resolved target
 	command := &SpellCommand{
 		ID:       request.ID,
@@ -106,7 +132,7 @@ func (cm *ClientManager) ExecuteCastRequest(request *CastRequest) error {
 		Priority: request.Priority,
 		Timeout:  request.Timeout,
 	}
-	
+
 	// Send command to client
 	return client.SendSpellCommand(command)
 }
@@ -117,22 +143,22 @@ func (cm *ClientManager) selectClientForCast(request *CastRequest) (ClientInterf
 	if len(connectedClients) == 0 {
 		return nil, fmt.Errorf("no connected clients available")
 	}
-	
+
 	// For now, select the first available client
 	// In a more sophisticated implementation, this could consider:
 	// - Client MP levels
 	// - Job levels and spell availability
 	// - Current casting load
 	// - Geographic proximity to target
-	
+
 	for _, client := range connectedClients {
 		info := client.GetClientInfo()
-		
+
 		// Basic checks
 		if info.MP < 10 { // Minimum MP threshold
 			continue
 		}
-		
+
 		// Check if client has the required job levels for the spell
 		if request.Context != nil && len(request.Context.CasterJobLevels) > 0 {
 			hasRequiredJob := false
@@ -148,10 +174,10 @@ func (cm *ClientManager) selectClientForCast(request *CastRequest) (ClientInterf
 				continue
 			}
 		}
-		
+
 		return client, nil
 	}
-	
+
 	return nil, fmt.Errorf("no suitable client found for cast request")
 }
 
@@ -159,7 +185,7 @@ func (cm *ClientManager) selectClientForCast(request *CastRequest) (ClientInterf
 func (cm *ClientManager) BroadcastCastRequest(request *CastRequest) []error {
 	connectedClients := cm.GetConnectedClients()
 	var errors []error
-	
+
 	for clientID, client := range connectedClients {
 		command := &SpellCommand{
 			ID:       fmt.Sprintf("%s_%s", request.ID, clientID),
@@ -168,12 +194,12 @@ func (cm *ClientManager) BroadcastCastRequest(request *CastRequest) []error {
 			Priority: request.Priority,
 			Timeout:  request.Timeout,
 		}
-		
+
 		if err := client.SendSpellCommand(command); err != nil {
 			errors = append(errors, fmt.Errorf("client %s: %v", clientID, err))
 		}
 	}
-	
+
 	return errors
 }
 
@@ -187,13 +213,13 @@ func (cm *ClientManager) NotifySpellComplete(commandID string, success bool, err
 func (cm *ClientManager) GetClientStats() map[string]interface{} {
 	totalClients := len(cm.clients)
 	connectedCount := 0
-	
+
 	for _, client := range cm.clients {
 		if client.IsConnected() {
 			connectedCount++
 		}
 	}
-	
+
 	return map[string]interface{}{
 		"total_clients":     totalClients,
 		"connected_clients": connectedCount,

@@ -23,6 +23,7 @@ import (
 	"PandaBot/internal/statusMonitor"
 	"PandaBot/internal/textParser"
 	"PandaBot/internal/triggerService"
+	"PandaBot/internal/zone"
 )
 
 // Server represents the main PandaBot server
@@ -82,11 +83,12 @@ type QueuedCommand struct {
 
 // Client represents a connected Lua addon client
 type Client struct {
-	conn       net.Conn
-	reader     *bufio.Reader
-	writer     *bufio.Writer
-	lastSeen   time.Time
-	playerName string // Name of the player running this client
+	conn        net.Conn
+	reader      *bufio.Reader
+	writer      *bufio.Writer
+	lastSeen    time.Time
+	playerName  string // Name of the player running this client
+	currentZone string // Current zone ID for the client
 
 	// Command queue management
 	commandQueue   []*QueuedCommand
@@ -515,6 +517,12 @@ func (s *Server) processJSONMessage(client *Client, messageStr string) {
 	case protocol.TypeSpellFailed:
 		s.handleJSONSpellFailed(client, &msg)
 
+	case protocol.TypeReadyResponse:
+		s.handleJSONReadyResponse(client, &msg)
+
+	case protocol.TypeReadyForAction:
+		s.castingSystem.HandleReadyForAction(client.conn)
+
 	case protocol.TypeErrorReport:
 		s.handleJSONErrorReport(client, &msg)
 
@@ -624,6 +632,24 @@ func (s *Server) handleJSONSpellFailed(client *Client, msg *protocol.Message) {
 	}
 }
 
+// handleJSONReadyResponse processes a JSON ready response notification
+func (s *Server) handleJSONReadyResponse(client *Client, msg *protocol.Message) {
+	bodyBytes, err := json.Marshal(msg.Body)
+	if err != nil {
+		log.Printf("Failed to marshal ready response body: %v", err)
+		return
+	}
+
+	var resp protocol.ReadyResponse
+	if err := json.Unmarshal(bodyBytes, &resp); err != nil {
+		log.Printf("Failed to unmarshal ready response: %v", err)
+		return
+	}
+
+	// Notify centralized casting system
+	s.castingSystem.HandleReadyResponse(client.conn, &resp)
+}
+
 // handleJSONChatMessage processes a JSON chat message
 func (s *Server) handleJSONChatMessage(client *Client, msg *protocol.Message) {
 	bodyBytes, err := json.Marshal(msg.Body)
@@ -665,7 +691,7 @@ func (s *Server) validateQueuedActions(client *Client) {
 
 	validQueue := make([]*QueuedCommand, 0, len(client.commandQueue))
 	for _, cmd := range client.commandQueue {
-		if s.isCommandStillNecessary(cmd) {
+		if s.isCommandStillNecessary(client, cmd) {
 			validQueue = append(validQueue, cmd)
 		} else {
 			log.Printf("Queue GC: Removing unnecessary command %s: %s for %s", cmd.ID, cmd.Command, cmd.Target)
@@ -679,10 +705,16 @@ func (s *Server) validateQueuedActions(client *Client) {
 }
 
 // isCommandStillNecessary checks if a queued command is still needed based on game state
-func (s *Server) isCommandStillNecessary(cmd *QueuedCommand) bool {
+func (s *Server) isCommandStillNecessary(client *Client, cmd *QueuedCommand) bool {
 	// Self-recovery items are always necessary until used or silence wears off
 	if cmd.Priority >= 100 {
 		return true
+	}
+
+	// Check if in restricted zone
+	if zone.IsRestricted(client.currentZone) {
+		log.Printf("[ZONE] Casting restricted in %s, removing command %s", client.currentZone, cmd.Command)
+		return false
 	}
 
 	targetName := cmd.Target
@@ -715,6 +747,25 @@ func (s *Server) isCommandStillNecessary(cmd *QueuedCommand) bool {
 		return false
 	}
 
+	// Check if the command is for a buff the target already has
+	lowerCmd := strings.ToLower(cmd.Command)
+
+	// Use centralized buff to status mapping
+	buffChecks := statusMonitor.GetBuffToStatusMap()
+
+	for substr, statusID := range buffChecks {
+		if strings.Contains(lowerCmd, substr) {
+			// Check if target already has this status effect
+			for _, currentStatusID := range member.StatusIDs {
+				if currentStatusID == statusID {
+					log.Printf("Queue GC: Target %s already has buff %s (status %d), removing command", targetName, substr, statusID)
+					return false
+				}
+			}
+			break
+		}
+	}
+
 	return true
 }
 
@@ -738,6 +789,28 @@ func (s *Server) handleJSONStatusUpdate(client *Client, msg *protocol.Message) {
 	log.Printf("[STATUS DEBUG]   Player HP: %d, Player MP: %d", status.PlayerHP, status.PlayerMP)
 	log.Printf("[STATUS DEBUG]   Zone: %s", status.Zone)
 	log.Printf("[STATUS DEBUG]   Job Levels: %v", status.JobLevels)
+
+	// Check for zone change
+	if client.currentZone != status.Zone {
+		if client.currentZone != "" {
+			log.Printf("[ZONE CHANGE] Player %s moved from %s to %s", client.playerName, client.currentZone, status.Zone)
+			log.Printf("[ZONE CHANGE] Clearing casting queue and tracked buffs")
+
+			// Clear client's own queue
+			client.queueMutex.Lock()
+			client.commandQueue = nil
+			client.currentCommand = nil
+			client.queueMutex.Unlock()
+
+			// Clear casting engine queue
+			s.castingSystem.GetCastingEngine().ClearQueue()
+
+			// Clear status monitor buffs
+			s.statusMonitor.ClearDesiredBuffs()
+		}
+		client.currentZone = status.Zone
+	}
+
 	log.Printf("[STATUS DEBUG]   Party Members (%d):", len(status.PartyMembers))
 
 	// Process each party member
@@ -1048,6 +1121,9 @@ func (s *Server) processCommandQueues() {
 				s.validateQueuedActions(client)
 			}
 			s.clientsMutex.RUnlock()
+
+			// Periodically validate the centralized casting system's active casts
+			s.validateCastingEngineCasts()
 		case <-s.stopChan:
 			return
 		}
@@ -1084,6 +1160,68 @@ func (s *Server) logQueueState(client *Client, context string) {
 	}
 }
 
+// validateCastingEngineCasts performs GC on the centralized casting engine's active casts
+func (s *Server) validateCastingEngineCasts() {
+	activeCasts := s.castingSystem.GetCastingEngine().GetActiveCasts()
+	if len(activeCasts) == 0 {
+		return
+	}
+
+	for id, activeCast := range activeCasts {
+		// Only consider pending casts for removal due to redundancy
+		// In-progress casts are already being cast by the client
+		if activeCast.State != casting.CastStatePending {
+			continue
+		}
+
+		targetName := activeCast.Request.Target
+		if targetName == "" || targetName == "<me>" || targetName == "<t>" {
+			continue
+		}
+
+		member, exists := s.statusMonitor.GetPartyMember(targetName)
+		if !exists {
+			continue
+		}
+
+		spellName := activeCast.Request.SpellName
+		if spellName == "" {
+			continue
+		}
+
+		// Map of spell names to status IDs for redundancy check
+		// Use centralized buff to status mapping
+		buffChecks := statusMonitor.GetBuffToStatusMap()
+
+		// Normalize spell name (remove level suffixes like V)
+		baseSpellName := spellName
+		if idx := strings.LastIndex(spellName, " "); idx != -1 {
+			// Check if the last part is a Roman numeral (I, II, III, IV, V)
+			lastPart := spellName[idx+1:]
+			isRoman := true
+			for _, char := range lastPart {
+				if char != 'I' && char != 'V' && char != 'X' {
+					isRoman = false
+					break
+				}
+			}
+			if isRoman {
+				baseSpellName = spellName[:idx]
+			}
+		}
+
+		if statusID, ok := buffChecks[strings.ToLower(baseSpellName)]; ok {
+			for _, currentStatusID := range member.StatusIDs {
+				if currentStatusID == statusID {
+					log.Printf("Casting Engine GC: Target %s already has buff %s (status %d), cancelling cast %s", targetName, spellName, statusID, id)
+					s.castingSystem.GetCastingEngine().CancelCast(id)
+					break
+				}
+			}
+		}
+	}
+}
+
 // GetStats returns server statistics
 func (s *Server) GetStats() map[string]interface{} {
 	s.clientsMutex.RLock()
@@ -1115,4 +1253,8 @@ func getJobNameFromID(jobID int) string {
 // GetCastingSystem returns the centralized casting system for external access
 func (s *Server) GetCastingSystem() *casting.CastingServerIntegration {
 	return s.castingSystem
+}
+
+func (s *Server) GetStatusMonitor() *statusMonitor.StatusMonitor {
+	return s.statusMonitor
 }

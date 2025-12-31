@@ -143,6 +143,21 @@ func (aas *AutoActionService) ProcessAutomaticActions(statusMonitor *statusMonit
 			} else {
 				log.Printf("Queued echo drop usage (request ID: %s)", requestID)
 			}
+
+		case "manual_spell":
+			// For desired buffs that are missing, add back into the queue
+			partyEntities := buildPartyEntities(statusMonitor)
+			requestIDs := aas.castingSystem.ProcessTriggerEvent(
+				action.Spell,
+				action.Target,
+				action.Priority,
+				partyEntities,
+			)
+			if len(requestIDs) == 0 {
+				log.Printf("Failed to queue missing buff %s for %s", action.Spell, action.Target)
+			} else {
+				log.Printf("Queued missing buff %s for %s (request IDs: %v)", action.Spell, action.Target, requestIDs)
+			}
 		}
 	}
 }

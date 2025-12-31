@@ -18,7 +18,25 @@ const (
 	TypeErrorReport    MessageType = 30 // Ashita -> Go (command execution errors)
 	TypeSpellComplete  MessageType = 31 // Ashita -> Go (spell completion notification)
 	TypeSpellFailed    MessageType = 32 // Ashita -> Go (spell failure notification)
+	TypeReadyToCast    MessageType = 40 // Go -> Ashita (check if ready)
+	TypeReadyResponse  MessageType = 41 // Ashita -> Go (ready status)
+	TypeReadyForAction MessageType = 42 // Ashita -> Go (client is ready for next action)
 )
+
+type ReadyForAction struct {
+	PlayerName string `json:"player_name"`
+	Timestamp  int64  `json:"timestamp"`
+}
+
+type ReadyToCast struct {
+	CommandID string `json:"command_id"`
+}
+
+type ReadyResponse struct {
+	CommandID string `json:"command_id"`
+	IsReady   bool   `json:"is_ready"`
+	Reason    string `json:"reason"` // Reason if not ready (e.g., "moving", "casting")
+}
 
 type Message struct {
 	Type MessageType `json:"type"`
@@ -108,6 +126,12 @@ func ValidateMessage(msg *Message) error {
 		return ValidateChatLine(msg.Body)
 	case TypeStatusUpdate:
 		return ValidateStatusUpdate(msg.Body)
+	case TypeReadyForAction:
+		return nil
+	case TypeReadyToCast:
+		return nil // Body is ReadyToCast struct
+	case TypeReadyResponse:
+		return nil // Body is ReadyResponse struct
 	case TypeErrorReport:
 		return ValidateErrorReport(msg.Body)
 	case TypeSpellComplete:
@@ -292,6 +316,42 @@ func UnmarshalMessage(data []byte) (*Message, error) {
 }
 
 // MarshalExecuteCommand serializes an ExecuteCommand to JSON
+func UnmarshalReadyToCast(data []byte) (*ReadyToCast, error) {
+	var body ReadyToCast
+	if err := json.Unmarshal(data, &body); err != nil {
+		return nil, err
+	}
+	return &body, nil
+}
+
+func UnmarshalReadyResponse(data []byte) (*ReadyResponse, error) {
+	var body ReadyResponse
+	if err := json.Unmarshal(data, &body); err != nil {
+		return nil, err
+	}
+	return &body, nil
+}
+
+func MarshalReadyForAction(body *ReadyForAction) ([]byte, error) {
+	return json.Marshal(body)
+}
+
+func UnmarshalReadyForAction(data []byte) (*ReadyForAction, error) {
+	var body ReadyForAction
+	if err := json.Unmarshal(data, &body); err != nil {
+		return nil, err
+	}
+	return &body, nil
+}
+
+func MarshalReadyToCast(body *ReadyToCast) ([]byte, error) {
+	return json.Marshal(body)
+}
+
+func MarshalReadyResponse(body *ReadyResponse) ([]byte, error) {
+	return json.Marshal(body)
+}
+
 func MarshalExecuteCommand(cmd *ExecuteCommand) ([]byte, error) {
 	return json.Marshal(cmd)
 }

@@ -1,0 +1,3 @@
+# Healing settings
+cure_threshold_percent = 70
+na_removal_enabled = true

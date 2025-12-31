@@ -49,6 +49,12 @@ func (tp *TextParser) initializeDefaultTriggers() {
 	tp.triggerMap["poisoned"] = 5
 	tp.triggerMap["blinded"] = 4
 	tp.triggerMap["erase"] = 7
+	tp.triggerMap["cursna"] = 8
+	tp.triggerMap["cursed"] = 8
+	tp.triggerMap["doom"] = 10
+	tp.triggerMap["viruna"] = 7
+	tp.triggerMap["diseased"] = 7
+	tp.triggerMap["plagued"] = 7
 
 	// Buff triggers
 	tp.triggerMap["firebuffs"] = 3
@@ -61,11 +67,22 @@ func (tp *TextParser) initializeDefaultTriggers() {
 	tp.triggerMap["darkbuffs"] = 3
 	tp.triggerMap["protect"] = 3
 	tp.triggerMap["shell"] = 3
+	tp.triggerMap["haste"] = 5
+	tp.triggerMap["whmprep"] = 7
+	tp.triggerMap["auspice"] = 4
+	tp.triggerMap["reraise"] = 6
+	tp.triggerMap["solace"] = 5
+	tp.triggerMap["misery"] = 5
+	tp.triggerMap["lightarts"] = 5
+	tp.triggerMap["darkarts"] = 5
 
 	// Healing triggers
 	tp.triggerMap["heal"] = 9
 	tp.triggerMap["cure"] = 9
 	tp.triggerMap["help"] = 8
+
+	// Control triggers
+	tp.triggerMap["panda"] = 10
 }
 
 // ParseMessage analyzes a chat message and returns generic trigger events

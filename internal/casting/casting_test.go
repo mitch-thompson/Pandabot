@@ -511,7 +511,7 @@ func TestCastingEngine_Configuration(t *testing.T) {
 		request := &CastRequest{
 			ID:        fmt.Sprintf("test_concurrent_%d", i),
 			Type:      CastTypeManual,
-			SpellName: "Cure",
+			SpellName: fmt.Sprintf("Cure %d", i),
 			Target:    "TestPlayer",
 			Priority:  5,
 			Context: &CastContext{

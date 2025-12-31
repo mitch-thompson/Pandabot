@@ -3,6 +3,7 @@ package buffSelector
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 
 	"PandaBot/internal/spell"
@@ -376,11 +377,81 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 		},
 	}
 
+	// Haste
+	hasteSpells := []*spell.Spell{
+		{
+			English:  "Haste",
+			ID:       57,
+			MPCost:   40,
+			CastTime: 2.0,
+			Recast:   20.0,
+			Type:     spell.Enhancing,
+			Element:  spell.Wind,
+			Targets:  spell.TargetPartyMember,
+			Priority: 1,
+			LevelReq: map[string]int{"WHM": 40, "RDM": 48, "BRD": 40, "SCH": 40, "GEO": 40, "RUN": 50},
+		},
+	}
+
+	// WHM Preparation spells
+	whmPrepSpells := []*spell.Spell{
+		{
+			English:  "Auspice",
+			ID:       272,
+			MPCost:   48,
+			CastTime: 2.0,
+			Recast:   10.0,
+			Type:     spell.Enhancing,
+			Element:  spell.Light,
+			Targets:  spell.TargetSelf,
+			Priority: 1,
+			LevelReq: map[string]int{"WHM": 55},
+		},
+		{
+			English:  "Reraise",
+			ID:       113,
+			MPCost:   150,
+			CastTime: 8.0,
+			Recast:   60.0,
+			Type:     spell.Enhancing,
+			Element:  spell.Light,
+			Targets:  spell.TargetSelf,
+			Priority: 1,
+			LevelReq: map[string]int{"WHM": 25, "SCH": 35},
+		},
+		{
+			English:  "Reraise II",
+			ID:       129,
+			MPCost:   150,
+			CastTime: 8.0,
+			Recast:   60.0,
+			Type:     spell.Enhancing,
+			Element:  spell.Light,
+			Targets:  spell.TargetSelf,
+			Priority: 2,
+			LevelReq: map[string]int{"WHM": 56, "SCH": 70},
+		},
+		{
+			English:  "Reraise III",
+			ID:       141,
+			MPCost:   150,
+			CastTime: 8.0,
+			Recast:   60.0,
+			Type:     spell.Enhancing,
+			Element:  spell.Light,
+			Targets:  spell.TargetSelf,
+			Priority: 3,
+			LevelReq: map[string]int{"WHM": 70, "SCH": 91},
+		},
+	}
+
 	// Add all spells to database and categorize them
 	allSpells := append(protectSpells, protectraSpells...)
 	allSpells = append(allSpells, shellSpells...)
 	allSpells = append(allSpells, shellraSpells...)
 	allSpells = append(allSpells, barSpells...)
+	allSpells = append(allSpells, hasteSpells...)
+	allSpells = append(allSpells, whmPrepSpells...)
 
 	for _, buffSpell := range allSpells {
 		bs.spellDatabase[buffSpell.English] = buffSpell
@@ -675,6 +746,55 @@ func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[st
 	}
 
 	return sequence, nil
+}
+
+// SelectOptimalReraise selects the highest Reraise spell available
+func (bs *BuffSelector) SelectOptimalReraise(jobLevels map[string]int, availableMP int) (*BuffOption, error) {
+	bs.mu.RLock()
+	defer bs.mu.RUnlock()
+
+	var bestOption *BuffOption
+	bestPriority := -1
+
+	for _, spellObj := range bs.spellDatabase {
+		if !strings.HasPrefix(spellObj.English, "Reraise") {
+			continue
+		}
+
+		// Check MP requirement
+		if int(spellObj.MPCost) > availableMP {
+			continue
+		}
+
+		// Check job level requirement
+		canCast := false
+		for job, level := range jobLevels {
+			if requiredLevel, exists := spellObj.LevelReq[job]; exists {
+				if level >= requiredLevel {
+					canCast = true
+					break
+				}
+			}
+		}
+
+		if canCast && spellObj.Priority > bestPriority {
+			bestPriority = spellObj.Priority
+			bestOption = &BuffOption{
+				SpellName:   spellObj.English,
+				Spell:       spellObj,
+				MPCost:      int(spellObj.MPCost),
+				CastTime:    spellObj.CastTime,
+				Efficiency:  1.0 / float64(spellObj.MPCost),
+				IsAreaSpell: false,
+			}
+		}
+	}
+
+	if bestOption == nil {
+		return nil, fmt.Errorf("no Reraise spell available")
+	}
+
+	return bestOption, nil
 }
 
 // GetBuffSpellInfo returns information about a specific buff spell

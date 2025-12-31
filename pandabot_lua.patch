@@ -1,0 +1,20 @@
+--- a/cmd/addon/pandabot.lua
++++ b/cmd/addon/pandabot.lua
+@@ -490,7 +490,7 @@
+ 				-- Action completed
+ 				if current_action.id then
+ 					debug_log(string.format('Detected action completion via packet 0x028: %s', current_action.id))
+-					send_spell_completion(current_action.id)
++					ashita.timer.once(0.5, function() send_spell_completion(current_action.id) end)
+ 					current_action.id = nil
+ 					current_action.is_casting = false
+ 				end
+@@ -498,7 +498,7 @@
+ 				-- Action failed / interrupted
+ 				if current_action.id then
+ 					debug_log(string.format('Detected action failure via packet 0x028: %s', current_action.id))
+-					send_spell_failure(current_action.id, "Action interrupted or failed")
++					ashita.timer.once(0.5, function() send_spell_failure(current_action.id, "Action interrupted or failed") end)
+ 					current_action.id = nil
+ 					current_action.is_casting = false
+ 				end

@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"PandaBot/internal/entity"
 )
+
+var globalRequestSeq uint64
 
 type Engine interface {
 	RequestCast(request *CastRequest) error
@@ -38,76 +41,219 @@ func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender strin
 		PartySize:       len(partyMembers),
 	}
 
+	// Use a base timestamp for all requests in this call, but we'll add a sequence number to ensure uniqueness
+	baseNano := time.Now().UnixNano() + int64(atomic.AddUint64(&globalRequestSeq, 1000))
+	getUniqueNano := func(seq int) int64 {
+		return baseNano + int64(seq)
+	}
+	seq := 0
+
 	switch {
 	// Status removal triggers
 	case triggerType == "stoned":
-		requestID, err := tp.processNaTrigger("Stona", sender, priority, context)
+		requestID, err := tp.processNaTrigger("Stona", sender, priority, context, getUniqueNano(seq))
+		seq++
 		if err != nil {
 			return nil, fmt.Errorf("failed to process stoned trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
 
 	case triggerType == "paralyzed":
-		requestID, err := tp.processNaTrigger("Paralyna", sender, priority, context)
+		requestID, err := tp.processNaTrigger("Paralyna", sender, priority, context, getUniqueNano(seq))
+		seq++
 		if err != nil {
 			return nil, fmt.Errorf("failed to process paralyzed trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
 
 	case triggerType == "silenced":
-		requestID, err := tp.processNaTrigger("Silena", sender, priority, context)
+		requestID, err := tp.processNaTrigger("Silena", sender, priority, context, getUniqueNano(seq))
+		seq++
 		if err != nil {
 			return nil, fmt.Errorf("failed to process silenced trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
 
 	case triggerType == "poisoned":
-		requestID, err := tp.processNaTrigger("Poisona", sender, priority, context)
+		requestID, err := tp.processNaTrigger("Poisona", sender, priority, context, getUniqueNano(seq))
+		seq++
 		if err != nil {
 			return nil, fmt.Errorf("failed to process poisoned trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
 
 	case triggerType == "blinded":
-		requestID, err := tp.processNaTrigger("Blindna", sender, priority, context)
+		requestID, err := tp.processNaTrigger("Blindna", sender, priority, context, getUniqueNano(seq))
+		seq++
 		if err != nil {
 			return nil, fmt.Errorf("failed to process blinded trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
 
 	case triggerType == "erase":
-		requestID, err := tp.processNaTrigger("Erase", sender, priority, context)
+		requestID, err := tp.processNaTrigger("Erase", sender, priority, context, getUniqueNano(seq))
+		seq++
 		if err != nil {
 			return nil, fmt.Errorf("failed to process erase trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
 
+	case triggerType == "cursna" || triggerType == "cursed" || triggerType == "doom":
+		requestID, err := tp.processNaTrigger("Cursna", sender, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process cursna trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "viruna" || triggerType == "diseased" || triggerType == "plagued":
+		requestID, err := tp.processNaTrigger("Viruna", sender, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process viruna trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
 	// Healing triggers
 	case triggerType == "heal" || triggerType == "cure" || triggerType == "help":
-		requestID, err := tp.processCureTrigger(sender, priority, context)
+		requestID, err := tp.processCureTrigger(sender, priority, context, getUniqueNano(seq))
+		seq++
 		if err != nil {
 			return nil, fmt.Errorf("failed to process heal trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
 
 	case triggerType == "protect":
-		requestID, err := tp.processProtectTrigger(sender, priority, context)
+		requestID, err := tp.processProtectTrigger(sender, priority, context, getUniqueNano(seq))
+		seq++
 		if err != nil {
 			return nil, fmt.Errorf("failed to process protect trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
 
 	case triggerType == "shell":
-		requestID, err := tp.processShellTrigger(sender, priority, context)
+		requestID, err := tp.processShellTrigger(sender, priority, context, getUniqueNano(seq))
+		seq++
 		if err != nil {
 			return nil, fmt.Errorf("failed to process shell trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
 
+	case triggerType == "haste":
+		requestID, err := tp.castManualSpell("Haste", sender, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process haste trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "auspice":
+		requestID, err := tp.castManualSpell("Auspice", casterName, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process auspice trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "reraise":
+		requestID, err := tp.processReraiseTrigger(casterName, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process reraise trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "light arts" || triggerType == "lightarts":
+		requestID, err := tp.castManualSpell("Light Arts", casterName, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process light arts trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "dark arts" || triggerType == "darkarts":
+		requestID, err := tp.castManualSpell("Dark Arts", casterName, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process dark arts trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "afflatus solace" || triggerType == "solace":
+		requestID, err := tp.castManualSpell("Afflatus Solace", casterName, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process afflatus solace trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "afflatus misery" || triggerType == "misery":
+		requestID, err := tp.castManualSpell("Afflatus Misery", casterName, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process afflatus misery trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "barfire":
+		requestID, err := tp.castManualSpell("Barfira", casterName, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process barfire trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "barice":
+		requestID, err := tp.castManualSpell("Barblizzara", casterName, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process barice trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "barwind":
+		requestID, err := tp.castManualSpell("Baraera", casterName, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process barwind trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "barearth":
+		requestID, err := tp.castManualSpell("Barstonra", casterName, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process barearth trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "barlightning":
+		requestID, err := tp.castManualSpell("Barthundra", casterName, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process barlightning trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "barwater":
+		requestID, err := tp.castManualSpell("Barwatera", casterName, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process barwater trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	// Control triggers
+	case triggerType == "panda":
+		log.Printf("Panda control trigger received from %s", sender)
+		// No request ID generated for internal control command
+		return nil, nil
+
 	// Buff triggers - these target the caster, not the sender
 	case strings.HasSuffix(triggerType, "buffs"):
 		buffType := triggerType // firebuffs, waterbuffs, etc.
-		requestID, err := tp.processBuffTrigger(buffType, casterName, priority, context)
+		requestID, err := tp.processBuffTrigger(buffType, casterName, priority, context, getUniqueNano(seq))
+		seq++
 		if err != nil {
 			return nil, fmt.Errorf("failed to process buff trigger %s: %v", buffType, err)
 		}
@@ -121,7 +267,7 @@ func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender strin
 }
 
 // processNaTrigger processes a status removal trigger
-func (tp *TriggerProcessor) processNaTrigger(spellName string, target string, priority int, context *CastContext) (string, error) {
+func (tp *TriggerProcessor) processNaTrigger(spellName string, target string, priority int, context *CastContext, timestamp int64) (string, error) {
 	// Find the target entity to get their status effects
 	var targetEntity *entity.Entity
 	for _, member := range context.PartyMembers {
@@ -134,7 +280,7 @@ func (tp *TriggerProcessor) processNaTrigger(spellName string, target string, pr
 	if targetEntity == nil {
 		// If we can't find the entity, still try to cast the specific spell
 		log.Printf("Target entity %s not found, casting %s anyway", target, spellName)
-		return tp.castManualSpell(spellName, target, priority, context)
+		return tp.castManualSpell(spellName, target, priority, context, timestamp)
 	}
 
 	// Update context with target information
@@ -150,7 +296,7 @@ func (tp *TriggerProcessor) processNaTrigger(spellName string, target string, pr
 	context.StatusEffects = statusEffects
 
 	// Create casting request for na spell
-	requestID := fmt.Sprintf("na_%d", time.Now().UnixNano())
+	requestID := fmt.Sprintf("na_%d", timestamp)
 	request := &CastRequest{
 		ID:        requestID,
 		Type:      CastTypeManual, // Use manual type with specific spell
@@ -169,7 +315,7 @@ func (tp *TriggerProcessor) processNaTrigger(spellName string, target string, pr
 }
 
 // processCureTrigger processes a healing trigger
-func (tp *TriggerProcessor) processCureTrigger(target string, priority int, context *CastContext) (string, error) {
+func (tp *TriggerProcessor) processCureTrigger(target string, priority int, context *CastContext, timestamp int64) (string, error) {
 	log.Printf("[TRIGGER DEBUG] Processing cure trigger for target: %s, priority: %d", target, priority)
 
 	// Find the target entity to determine cure needs
@@ -184,7 +330,7 @@ func (tp *TriggerProcessor) processCureTrigger(target string, priority int, cont
 	if targetEntity == nil {
 		// If we can't find the entity, cast a basic cure
 		log.Printf("[TRIGGER DEBUG] Target entity %s not found, casting basic Cure", target)
-		return tp.castManualSpell("Cure", target, priority, context)
+		return tp.castManualSpell("Cure", target, priority, context, timestamp)
 	}
 
 	log.Printf("[TRIGGER DEBUG] Found target entity: %s, HP: %d/%d (%d%%), Job: %s Level: %d",
@@ -246,7 +392,7 @@ func (tp *TriggerProcessor) processCureTrigger(target string, priority int, cont
 	log.Printf("[TRIGGER DEBUG] Final missing HP calculation: %d (method: %s)", missingHP, calculationMethod)
 
 	// Create casting request for cure spell (let engine select optimal cure)
-	requestID := fmt.Sprintf("cure_%d", time.Now().UnixNano())
+	requestID := fmt.Sprintf("cure_%d", timestamp)
 	request := &CastRequest{
 		ID:       requestID,
 		Type:     CastTypeCure, // Let engine select optimal cure level
@@ -264,7 +410,7 @@ func (tp *TriggerProcessor) processCureTrigger(target string, priority int, cont
 }
 
 // processBuffTrigger processes a buff trigger
-func (tp *TriggerProcessor) processBuffTrigger(buffType string, target string, priority int, context *CastContext) (string, error) {
+func (tp *TriggerProcessor) processBuffTrigger(buffType string, target string, priority int, context *CastContext, timestamp int64) (string, error) {
 	// Update context with buff information
 	context.BuffType = buffType
 
@@ -278,7 +424,7 @@ func (tp *TriggerProcessor) processBuffTrigger(buffType string, target string, p
 	}
 
 	// Create casting request for buff sequence
-	requestID := fmt.Sprintf("buff_%d", time.Now().UnixNano())
+	requestID := fmt.Sprintf("buff_%d", timestamp)
 	request := &CastRequest{
 		ID:       requestID,
 		Type:     CastTypeBuff, // Let engine select optimal buff sequence
@@ -292,12 +438,28 @@ func (tp *TriggerProcessor) processBuffTrigger(buffType string, target string, p
 		return "", fmt.Errorf("failed to request buff cast: %v", err)
 	}
 
+	// Requirement: If the caster is a WHM, also prepare them
+	if level, exists := context.CasterJobLevels["WHM"]; exists && level > 0 {
+		log.Printf("[TRIGGER DEBUG] Caster is WHM, adding WHM preparation sequence")
+		whmPrepRequest := &CastRequest{
+			ID:       fmt.Sprintf("whmprep_%d", timestamp),
+			Type:     CastTypeWhmPrep,
+			Target:   context.CasterName,
+			Priority: priority,
+			Context:  context,
+		}
+		err = tp.engine.RequestCast(whmPrepRequest)
+		if err != nil {
+			log.Printf("[TRIGGER DEBUG] Failed to request WHM prep cast: %v", err)
+		}
+	}
+
 	return requestID, nil
 }
 
 // castManualSpell casts a specific spell manually
-func (tp *TriggerProcessor) castManualSpell(spellName string, target string, priority int, context *CastContext) (string, error) {
-	requestID := fmt.Sprintf("manual_%d", time.Now().UnixNano())
+func (tp *TriggerProcessor) castManualSpell(spellName string, target string, priority int, context *CastContext, timestamp int64) (string, error) {
+	requestID := fmt.Sprintf("manual_%d", timestamp)
 	request := &CastRequest{
 		ID:        requestID,
 		Type:      CastTypeManual,
@@ -316,8 +478,8 @@ func (tp *TriggerProcessor) castManualSpell(spellName string, target string, pri
 }
 
 // processProtectTrigger processes a protect trigger
-func (tp *TriggerProcessor) processProtectTrigger(target string, priority int, context *CastContext) (string, error) {
-	requestID := fmt.Sprintf("protect_%d", time.Now().UnixNano())
+func (tp *TriggerProcessor) processProtectTrigger(target string, priority int, context *CastContext, timestamp int64) (string, error) {
+	requestID := fmt.Sprintf("protect_%d", timestamp)
 	request := &CastRequest{
 		ID:       requestID,
 		Type:     CastTypeProtect, // Let engine select optimal Protect level
@@ -334,9 +496,34 @@ func (tp *TriggerProcessor) processProtectTrigger(target string, priority int, c
 	return requestID, nil
 }
 
+// processReraiseTrigger processes a reraise trigger
+func (tp *TriggerProcessor) processReraiseTrigger(target string, priority int, context *CastContext, timestamp int64) (string, error) {
+	requestID := fmt.Sprintf("reraise_%d", timestamp)
+	request := &CastRequest{
+		ID:        requestID,
+		Type:      CastTypeManual,
+		SpellName: "Reraise", // Default, engine will resolve if we use a specific type, but let's select it here if possible
+		Target:    target,
+		Priority:  priority,
+		Context:   context,
+	}
+
+	// We can't easily select the optimal reraise here without access to buffSelector
+	// So let's add a CastTypeReraise to the engine instead, or let CastTypeWhmPrep be smarter.
+	// Actually, let's just change the Type to a new CastTypeReraise.
+	request.Type = CastTypeReraise
+
+	err := tp.engine.RequestCast(request)
+	if err != nil {
+		return "", fmt.Errorf("failed to request reraise cast: %v", err)
+	}
+
+	return requestID, nil
+}
+
 // processShellTrigger processes a shell trigger
-func (tp *TriggerProcessor) processShellTrigger(target string, priority int, context *CastContext) (string, error) {
-	requestID := fmt.Sprintf("shell_%d", time.Now().UnixNano())
+func (tp *TriggerProcessor) processShellTrigger(target string, priority int, context *CastContext, timestamp int64) (string, error) {
+	requestID := fmt.Sprintf("shell_%d", timestamp)
 	request := &CastRequest{
 		ID:       requestID,
 		Type:     CastTypeShell, // Let engine select optimal Shell level

@@ -2,6 +2,7 @@ package statusMonitor
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -29,6 +30,7 @@ type PartyMember struct {
 	Job                int
 	Zone               int
 	StatusIDs          []int
+	DesiredBuffs       map[int]string // map of status ID to trigger/spell name
 	LastSeen           time.Time
 	NeedsHealing       bool
 	NeedsStatusRemoval bool
@@ -52,7 +54,7 @@ type StatusEffectInfo struct {
 
 // ActionTrigger represents a triggered action
 type ActionTrigger struct {
-	Type     string // "cure", "na_spell", "buff", "echo_drop"
+	Type     string // "cure", "na_spell", "buff", "echo_drop", "manual_spell"
 	Target   string
 	Spell    string
 	Priority int
@@ -77,16 +79,42 @@ func NewStatusMonitor() *StatusMonitor {
 // getDefaultStatusEffects returns the default status effect mappings
 func getDefaultStatusEffects() map[int]StatusEffectInfo {
 	return map[int]StatusEffectInfo{
-		2:  {ID: 2, Name: "Sleep", Severity: 3, SpellID: "Sleep"},
-		3:  {ID: 3, Name: "Poison", Severity: 2, SpellID: "Poisona"},
-		4:  {ID: 4, Name: "Paralysis", Severity: 3, SpellID: "Paralyna"},
-		5:  {ID: 5, Name: "Blindness", Severity: 2, SpellID: "Blindna"},
-		6:  {ID: 6, Name: "Silence", Severity: 3, SpellID: "Silena"},
-		7:  {ID: 7, Name: "Petrification", Severity: 4, SpellID: "Stona"},
-		8:  {ID: 8, Name: "Disease", Severity: 2, SpellID: "Viruna"},
-		9:  {ID: 9, Name: "Curse", Severity: 3, SpellID: "Cursna"},
-		28: {ID: 28, Name: "Terror", Severity: 4, SpellID: "Terror"},
-		31: {ID: 31, Name: "Plague", Severity: 3, SpellID: "Viruna"},
+		2:   {ID: 2, Name: "Sleep", Severity: 3, SpellID: "Sleep"},
+		3:   {ID: 3, Name: "Poison", Severity: 2, SpellID: "Poisona"},
+		4:   {ID: 4, Name: "Paralysis", Severity: 3, SpellID: "Paralyna"},
+		5:   {ID: 5, Name: "Blindness", Severity: 2, SpellID: "Blindna"},
+		6:   {ID: 6, Name: "Silence", Severity: 3, SpellID: "Silena"},
+		7:   {ID: 7, Name: "Petrification", Severity: 4, SpellID: "Stona"},
+		8:   {ID: 8, Name: "Disease", Severity: 2, SpellID: "Viruna"},
+		9:   {ID: 9, Name: "Curse", Severity: 3, SpellID: "Cursna"},
+		10:  {ID: 10, Name: "Silence", Severity: 3, SpellID: "Silena"}, // Duplicate for some FFXI versions?
+		11:  {ID: 11, Name: "Bind", Severity: 2, SpellID: "Erase"},
+		12:  {ID: 12, Name: "Weight", Severity: 2, SpellID: "Erase"},
+		13:  {ID: 13, Name: "Slow", Severity: 2, SpellID: "Erase"},
+		14:  {ID: 14, Name: "Charm", Severity: 4, SpellID: "Sleep"},
+		17:  {ID: 17, Name: "Attack Down", Severity: 2, SpellID: "Erase"},
+		18:  {ID: 18, Name: "Evasion Down", Severity: 2, SpellID: "Erase"},
+		19:  {ID: 19, Name: "Defense Down", Severity: 2, SpellID: "Erase"},
+		20:  {ID: 20, Name: "Magic Def. Down", Severity: 2, SpellID: "Erase"},
+		21:  {ID: 21, Name: "Magic Atk. Down", Severity: 2, SpellID: "Erase"},
+		28:  {ID: 28, Name: "Terror", Severity: 4, SpellID: "Terror"},
+		31:  {ID: 31, Name: "Plague", Severity: 3, SpellID: "Viruna"},
+		33:  {ID: 33, Name: "Haste", Severity: 1, SpellID: "Haste"},
+		40:  {ID: 40, Name: "Protect", Severity: 1, SpellID: "Protect"},
+		41:  {ID: 41, Name: "Shell", Severity: 1, SpellID: "Shell"},
+		100: {ID: 100, Name: "Barfire", Severity: 1, SpellID: "Barfira"},
+		101: {ID: 101, Name: "Barblizzard", Severity: 1, SpellID: "Barblizzara"},
+		102: {ID: 102, Name: "Baraero", Severity: 1, SpellID: "Baraera"},
+		103: {ID: 103, Name: "Barstone", Severity: 1, SpellID: "Barstonra"},
+		104: {ID: 104, Name: "Barthunder", Severity: 1, SpellID: "Barthundra"},
+		105: {ID: 105, Name: "Barwater", Severity: 1, SpellID: "Barwatera"},
+		113: {ID: 113, Name: "Reraise", Severity: 1, SpellID: "Reraise"},
+		173: {ID: 173, Name: "Ability", Severity: 0, SpellID: "None"},
+		272: {ID: 272, Name: "Auspice", Severity: 1, SpellID: "Auspice"},
+		358: {ID: 358, Name: "Light Arts", Severity: 1, SpellID: "Light Arts"},
+		359: {ID: 359, Name: "Dark Arts", Severity: 1, SpellID: "Dark Arts"},
+		417: {ID: 417, Name: "Afflatus Solace", Severity: 1, SpellID: "Afflatus Solace"},
+		418: {ID: 418, Name: "Afflatus Misery", Severity: 1, SpellID: "Afflatus Misery"},
 	}
 }
 
@@ -96,7 +124,6 @@ func (sm *StatusMonitor) UpdatePartyMember(name string, hpPercent, mpPercent, jo
 }
 
 // UpdatePartyMemberWithActuals updates a party member's status including actual HP/MP values
-// Note: This function doesn't have max HP/MP values, so they default to 0
 func (sm *StatusMonitor) UpdatePartyMemberWithActuals(name string, hpPercent, mpPercent, hpActual, mpActual, job, zone int, statusIDs []int) {
 	sm.UpdatePartyMemberWithMaxValues(name, hpPercent, mpPercent, hpActual, mpActual, 0, 0, job, zone, statusIDs)
 }
@@ -106,8 +133,9 @@ func (sm *StatusMonitor) UpdatePartyMemberWithMaxValues(name string, hpPercent, 
 	member, exists := sm.partyMembers[name]
 	if !exists {
 		member = &PartyMember{
-			Name:     name,
-			Priority: sm.calculateMemberPriority(job),
+			Name:         name,
+			Priority:     sm.calculateMemberPriority(job),
+			DesiredBuffs: make(map[int]string),
 		}
 		sm.partyMembers[name] = member
 	}
@@ -267,6 +295,28 @@ func (sm *StatusMonitor) CheckForActions() []ActionTrigger {
 				actions = append(actions, action)
 			}
 		}
+
+		// Check for desired buffs
+		for statusID, triggerName := range member.DesiredBuffs {
+			hasBuff := false
+			for _, currentID := range member.StatusIDs {
+				if currentID == statusID {
+					hasBuff = true
+					break
+				}
+			}
+
+			if !hasBuff {
+				// TODO: check zone logic (for now just recast)
+				actions = append(actions, ActionTrigger{
+					Type:     "manual_spell", // Or "buff" if we want optimal selection
+					Target:   member.Name,
+					Spell:    triggerName,
+					Priority: 5, // Default buff priority
+					Reason:   fmt.Sprintf("Desired buff %s (ID %d) is missing", triggerName, statusID),
+				})
+			}
+		}
 	}
 
 	return actions
@@ -327,6 +377,35 @@ func (sm *StatusMonitor) CleanupStaleMembers(maxAge time.Duration) int {
 	return removed
 }
 
+// RegisterDesiredBuff adds a buff that should be monitored for a player
+func (sm *StatusMonitor) RegisterDesiredBuff(playerName string, statusID int, triggerName string) {
+	targetName := playerName
+	if targetName == "<me>" {
+		targetName = sm.PlayerName
+	}
+
+	if targetName == "" {
+		// If we don't know the player name yet, we can't register it
+		return
+	}
+
+	member, exists := sm.partyMembers[targetName]
+	if !exists {
+		// If member doesn't exist yet, we can't easily register it without more info
+		// but let's create a placeholder if needed, or just return.
+		// For now, let's assume the member is usually there.
+		return
+	}
+	member.DesiredBuffs[statusID] = triggerName
+}
+
+// ClearDesiredBuffs clears all registered desired buffs for all party members
+func (sm *StatusMonitor) ClearDesiredBuffs() {
+	for _, member := range sm.partyMembers {
+		member.DesiredBuffs = make(map[int]string)
+	}
+}
+
 // GetPartyCount returns the number of tracked party members
 func (sm *StatusMonitor) GetPartyCount() int {
 	return len(sm.partyMembers)
@@ -347,6 +426,48 @@ func (sm *StatusMonitor) GetHealthThresholds() HealthThresholds {
 // GetLastUpdateTime returns when the monitor was last updated
 func (sm *StatusMonitor) GetLastUpdateTime() time.Time {
 	return sm.lastUpdate
+}
+
+// GetBuffToStatusMap returns a mapping of common buff names/substrings to status IDs
+func GetBuffToStatusMap() map[string]int {
+	m := make(map[string]int)
+
+	// Derive from default status effects
+	for id, info := range getDefaultStatusEffects() {
+		if info.Severity <= 1 && info.SpellID != "None" {
+			// Use both the status name and the spell name as triggers
+			m[strings.ToLower(info.Name)] = id
+			m[strings.ToLower(info.SpellID)] = id
+
+			// Special case for names with spaces (also add version without space)
+			if strings.Contains(info.Name, " ") {
+				m[strings.ToLower(strings.ReplaceAll(info.Name, " ", ""))] = id
+			}
+			if strings.Contains(info.SpellID, " ") {
+				m[strings.ToLower(strings.ReplaceAll(info.SpellID, " ", ""))] = id
+			}
+		}
+	}
+
+	return m
+}
+
+// GetElementalBarStatusMapping returns a mapping of elemental buff triggers to status IDs and spell names
+func GetElementalBarStatusMapping() map[string]struct {
+	StatusID  int
+	SpellName string
+} {
+	return map[string]struct {
+		StatusID  int
+		SpellName string
+	}{
+		"firebuffs":    {100, "barfire"},
+		"icebuffs":     {101, "barice"},
+		"windbuffs":    {102, "barwind"},
+		"earthbuffs":   {103, "barearth"},
+		"thunderbuffs": {104, "barlighting"},
+		"waterbuffs":   {105, "barwater"},
+	}
 }
 
 // IsStale returns true if the monitor hasn't been updated recently

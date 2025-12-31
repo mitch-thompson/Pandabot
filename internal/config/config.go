@@ -10,8 +10,6 @@ import (
 )
 
 type Config struct {
-	MemoryBackend string `toml:"memory_backend"`
-
 	CureThreshold    int  `toml:"cure_threshold_percent"`
 	NaRemovalEnabled bool `toml:"na_removal_enabled"`
 }
@@ -39,16 +37,11 @@ func Load() {
 		slog.Error("invalid TOML, using defaults", "err", err)
 		data = []byte(defaultConfig)
 	}
-	if cfg.MemoryBackend == "" {
-		cfg.MemoryBackend = "elite"
-	}
 	active.Store(&cfg)
-	slog.Info("config loaded", "backend", cfg.MemoryBackend)
+	slog.Info("config loaded")
 }
 
 var defaultConfig = `
-memory_backend = "elite"
-
 cure_threshold_percent = 70
 na_remove_enabled = true
 `

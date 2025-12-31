@@ -67,6 +67,8 @@ const (
 	CastTypeItem                     // Use an item
 	CastTypeProtect                  // Auto-selected Protect spell
 	CastTypeShell                    // Auto-selected Shell spell
+	CastTypeWhmPrep                  // WHM preparation sequence
+	CastTypeReraise                  // Auto-selected Reraise spell
 )
 
 // CastContext provides context for spell selection and casting
@@ -147,24 +149,22 @@ func NewCastingEngine(config *CastingConfig) *CastingEngine {
 func DefaultCastingConfig() *CastingConfig {
 	return &CastingConfig{
 		DefaultTimeout:     30 * time.Second,
-		MaxConcurrentCasts: 5,
-		RetryAttempts:      2,
-		RetryDelay:         2 * time.Second,
+		MaxConcurrentCasts: 1,
+		RetryAttempts:      30, // Increased to account for waiting on ready check
+		RetryDelay:         1 * time.Second,
 		PriorityThresholds: map[string]int{
 			"critical": 9,
 			"high":     7,
 			"medium":   5,
 			"low":      3,
 		},
-		MPReservation: 0,               // Keep 50 MP in reserve
-		SequenceDelay: 4 * time.Second, // Wait 4 seconds between spells in sequence
+		MPReservation: 0,                      // Keep 50 MP in reserve
+		SequenceDelay: 500 * time.Millisecond, // Reduced since we check if ready
 	}
 }
 
 // RequestCast submits a new casting request
 func (ce *CastingEngine) RequestCast(request *CastRequest) error {
-	// Queue debug log removed
-
 	ce.mu.Lock()
 
 	// If priority 10, cancel all other casts (Requirement 10.4)
@@ -183,8 +183,35 @@ func (ce *CastingEngine) RequestCast(request *CastRequest) error {
 
 	// Check concurrent cast limit
 	if len(ce.activeCasts) >= ce.config.MaxConcurrentCasts {
-		ce.mu.Unlock()
-		return fmt.Errorf("maximum concurrent casts reached (%d)", ce.config.MaxConcurrentCasts)
+		// Prune any terminal states that might have stuck in the map
+		pruned := false
+		for id, cast := range ce.activeCasts {
+			if cast.State == CastStateCompleted || cast.State == CastStateFailed || cast.State == CastStateCancelled || cast.State == CastStateTimeout {
+				delete(ce.activeCasts, id)
+				pruned = true
+			}
+		}
+
+		if pruned {
+			log.Printf("[QUEUE DEBUG] Pruned terminal states from activeCasts map")
+		}
+
+		if len(ce.activeCasts) >= ce.config.MaxConcurrentCasts {
+			ce.mu.Unlock()
+			return fmt.Errorf("maximum concurrent casts reached (%d)", ce.config.MaxConcurrentCasts)
+		}
+	}
+
+	// Check if we are already casting this spell on this target (prevent double triggers)
+	for _, active := range ce.activeCasts {
+		if active.Request.SpellName == request.SpellName &&
+			active.Request.Target == request.Target &&
+			(active.State == CastStatePending || active.State == CastStateInProgress) {
+			ce.mu.Unlock()
+			log.Printf("Ignoring duplicate cast request: %s on %s (already in state %s)",
+				request.SpellName, request.Target, ce.castStateToString(active.State))
+			return nil // Return nil as it's not an error, just redundant
+		}
 	}
 
 	// Create active cast
@@ -195,18 +222,44 @@ func (ce *CastingEngine) RequestCast(request *CastRequest) error {
 		AttemptCount: 0,
 	}
 
-	// Resolve spell selection based on cast type
+	// 1. Resolve spell selection based on cast type
 	if err := ce.resolveSpellSelection(activeCast); err != nil {
 		ce.mu.Unlock()
 		return fmt.Errorf("spell selection failed: %v", err)
 	}
 
-	// Queue debug log removed
+	// 2. Check if we are already casting this spell on this target (prevent double triggers)
+	// After resolution, request.SpellName should be populated for most types
+	// If it's a sequence, we check the first spell
+	for _, active := range ce.activeCasts {
+		if active.Request.Target == request.Target &&
+			(active.State == CastStatePending || active.State == CastStateInProgress) {
 
+			// If both are single spells and match
+			if ce.isEquivalentSpell(active.Request.SpellName, request.SpellName) {
+				ce.mu.Unlock()
+				log.Printf("Ignoring duplicate cast request: %s on %s (already in state %s)",
+					request.SpellName, request.Target, ce.castStateToString(active.State))
+				return nil
+			}
+
+			// If one or both are sequences, check if they overlap or are identical
+			if (request.Type == CastTypeSequence || active.Request.Type == CastTypeSequence) &&
+				active.Request.Type == request.Type &&
+				ce.isEquivalentSpell(active.Request.SpellName, request.SpellName) {
+				// For sequences of the same type starting with the same spell, assume duplicate
+				ce.mu.Unlock()
+				log.Printf("Ignoring duplicate sequence request: type %s, current spell %s on %s",
+					ce.castTypeToString(request.Type), request.SpellName, request.Target)
+				return nil
+			}
+		}
+	}
+
+	// 3. Create active cast entry
 	ce.activeCasts[request.ID] = activeCast
+	//ce.logQueueState("CAST_ADDED", request.ID)
 	ce.mu.Unlock()
-
-	// Queue debug log removed
 
 	// Start casting process
 	go ce.processCast(activeCast)
@@ -316,6 +369,56 @@ func (ce *CastingEngine) resolveSpellSelection(activeCast *ActiveCast) error {
 			return fmt.Errorf("shell selection failed: %v", err)
 		}
 		request.SpellName = shellOption.SpellName
+
+	case CastTypeReraise:
+		// Select optimal Reraise spell
+		reraiseOption, err := ce.buffSelector.SelectOptimalReraise(context.CasterJobLevels, context.CasterMP)
+		if err != nil {
+			return fmt.Errorf("reraise selection failed: %v", err)
+		}
+		request.SpellName = reraiseOption.SpellName
+
+	case CastTypeWhmPrep:
+		// Select WHM preparation sequence
+		whmSequence := []string{}
+
+		// 1. Light Arts (if available)
+		if level, exists := context.CasterJobLevels["SCH"]; (exists && level >= 10) || (context.CasterJobLevels["WHM"] >= 20 && context.CasterJobLevels["SCH"] >= 10) {
+			// Actually SCH main/sub 10.
+			whmSequence = append(whmSequence, "Light Arts")
+		} else if level, exists := context.CasterJobLevels["WHM"]; exists && level >= 1 {
+			// If not SCH, check if WHM main has it? No, WHM doesn't have Light Arts, SCH does.
+			// But if WHM/SCH, it's available at SCH 10.
+		}
+
+		// 2. Afflatus Solace (if available)
+		if level, exists := context.CasterJobLevels["WHM"]; exists && level >= 40 {
+			whmSequence = append(whmSequence, "Afflatus Solace")
+		}
+
+		// 3. Highest Reraise
+		reraiseOption, err := ce.buffSelector.SelectOptimalReraise(context.CasterJobLevels, context.CasterMP)
+		if err == nil {
+			whmSequence = append(whmSequence, reraiseOption.SpellName)
+		}
+
+		// 4. Auspice
+		if level, exists := context.CasterJobLevels["WHM"]; exists && level >= 50 {
+			whmSequence = append(whmSequence, "Auspice")
+		}
+
+		if len(whmSequence) == 0 {
+			return fmt.Errorf("no WHM prep actions available")
+		}
+
+		if len(whmSequence) == 1 {
+			request.SpellName = whmSequence[0]
+		} else {
+			request.Type = CastTypeSequence
+			activeCast.SpellsInSequence = whmSequence
+			activeCast.CurrentSpellIndex = 0
+			request.SpellName = whmSequence[0]
+		}
 
 	default:
 		return fmt.Errorf("unknown cast type: %v", request.Type)
@@ -540,6 +643,37 @@ func (ce *CastingEngine) isAreaSpellByName(spellName string) bool {
 		strings.Contains(spellName, "ga") // Curaga, etc.
 }
 
+// isEquivalentSpell checks if two spell names refer to the same effect
+func (ce *CastingEngine) isEquivalentSpell(spell1, spell2 string) bool {
+	if spell1 == spell2 {
+		return true
+	}
+
+	// Normalize by removing "ra" suffix and Roman numerals
+	normalize := func(s string) string {
+		s = strings.Replace(s, "ra", "", 1)
+
+		// Remove Roman numerals (I, II, III, IV, V)
+		parts := strings.Split(s, " ")
+		if len(parts) > 1 {
+			lastPart := parts[len(parts)-1]
+			isRoman := true
+			for _, char := range lastPart {
+				if char != 'I' && char != 'V' && char != 'X' {
+					isRoman = false
+					break
+				}
+			}
+			if isRoman {
+				return strings.Join(parts[:len(parts)-1], " ")
+			}
+		}
+		return s
+	}
+
+	return normalize(spell1) == normalize(spell2)
+}
+
 // selectOptimalNaSpell selects the best "na" spell for the context
 func (ce *CastingEngine) selectOptimalNaSpell(context *CastContext) (string, error) {
 	availableMP := context.CasterMP - ce.config.MPReservation
@@ -560,15 +694,22 @@ func (ce *CastingEngine) selectOptimalNaSpell(context *CastContext) (string, err
 
 // processCast handles the casting process for an active cast
 func (ce *CastingEngine) processCast(activeCast *ActiveCast) {
-	// Queue debug log removed
-
 	for activeCast.AttemptCount < ce.config.RetryAttempts {
+		// Check if cast was cancelled before starting/retrying
+		ce.mu.RLock()
+		if activeCast.State == CastStateCancelled {
+			ce.mu.RUnlock()
+			log.Printf("Cast process aborted for %s (cancelled)", activeCast.Request.ID)
+			return
+		}
+		ce.mu.RUnlock()
+
 		activeCast.AttemptCount++
 
 		// Update state
 		ce.mu.Lock()
 		activeCast.State = CastStateInProgress
-		ce.logQueueState("CAST_IN_PROGRESS", activeCast.Request.ID)
+		//ce.logQueueState("CAST_IN_PROGRESS", activeCast.Request.ID)
 		ce.mu.Unlock()
 
 		// Execute the cast through the casting engine's internal logic
@@ -588,7 +729,18 @@ func (ce *CastingEngine) processCast(activeCast *ActiveCast) {
 
 		// Check if we should retry
 		if activeCast.AttemptCount < ce.config.RetryAttempts {
-			time.Sleep(ce.config.RetryDelay)
+			// If not ready, wait a bit longer or use standard retry delay
+			delay := ce.config.RetryDelay
+			if strings.Contains(activeCast.LastError, "client not ready") {
+				// If client is just busy (casting/moving), we can retry sooner or later
+				// but let's stick to config or maybe a shorter 1s delay
+				delay = 1 * time.Second
+			} else if strings.Contains(activeCast.LastError, "disconnected") || strings.Contains(activeCast.LastError, "closed network connection") {
+				// If client is disconnected, we should retry sooner to pick a different client
+				// or wait for reconnection
+				delay = 2 * time.Second
+			}
+			time.Sleep(delay)
 			continue
 		}
 
@@ -638,13 +790,18 @@ func (ce *CastingEngine) executeCast(activeCast *ActiveCast) (bool, error) {
 // completeCast finalizes a casting operation
 func (ce *CastingEngine) completeCast(activeCast *ActiveCast) {
 	ce.mu.Lock()
-	defer ce.mu.Unlock()
+	// Check if it's already removed (might happen due to pruning or multiple completion calls)
+	if _, exists := ce.activeCasts[activeCast.Request.ID]; !exists {
+		ce.mu.Unlock()
+		return
+	}
 
 	// Remove from active casts
 	delete(ce.activeCasts, activeCast.Request.ID)
 
 	// Log queue state after removal
-	ce.logQueueState("CAST_REMOVED", activeCast.Request.ID)
+	//ce.logQueueState("CAST_REMOVED", activeCast.Request.ID)
+	ce.mu.Unlock()
 
 	// Create cast record
 	endTime := time.Now()
@@ -658,10 +815,12 @@ func (ce *CastingEngine) completeCast(activeCast *ActiveCast) {
 	}
 
 	// Add to history (keep last 100 records)
+	ce.mu.Lock()
 	ce.castHistory = append(ce.castHistory, record)
 	if len(ce.castHistory) > 100 {
 		ce.castHistory = ce.castHistory[1:]
 	}
+	ce.mu.Unlock()
 
 	// Call callback if provided
 	if activeCast.Request.Callback != nil {
@@ -690,9 +849,23 @@ func (ce *CastingEngine) CancelCast(requestID string) error {
 	activeCast.State = CastStateCancelled
 
 	// Log queue state after cancellation
-	ce.logQueueState("CAST_CANCELLED", requestID)
+	//ce.logQueueState("CAST_CANCELLED", requestID)
 
 	return nil
+}
+
+// ClearQueue cancels all active and pending casting operations
+func (ce *CastingEngine) ClearQueue() {
+	ce.mu.Lock()
+	defer ce.mu.Unlock()
+
+	for id, activeCast := range ce.activeCasts {
+		if activeCast.State == CastStatePending || activeCast.State == CastStateInProgress {
+			activeCast.State = CastStateCancelled
+			log.Printf("Cancelled cast request %s due to queue clear", id)
+		}
+		delete(ce.activeCasts, id)
+	}
 }
 
 // GetActiveCasts returns information about currently active casts
@@ -734,7 +907,21 @@ func (ce *CastingEngine) SetClientManager(clientManager *ClientManager) {
 // logQueueState logs the current state of the casting queue for debugging
 // NOTE: This function assumes the caller already holds the mutex lock
 func (ce *CastingEngine) logQueueState(operation string, requestID string) {
-	// Queue debug logs removed (no-op)
+	log.Printf("[QUEUE DEBUG] %s - RequestID: %s", operation, requestID)
+	log.Printf("  Active casts (%d):", len(ce.activeCasts))
+	for id, cast := range ce.activeCasts {
+		spellName := cast.Request.SpellName
+		if spellName == "" && len(cast.SpellsInSequence) > 0 {
+			if cast.CurrentSpellIndex < len(cast.SpellsInSequence) {
+				spellName = cast.SpellsInSequence[cast.CurrentSpellIndex]
+			} else {
+				spellName = "SEQUENCE_DONE"
+			}
+		}
+		log.Printf("    - %s: %s (State: %s, Priority: %d, Target: %s)",
+			id, spellName, ce.castStateToString(cast.State),
+			cast.Request.Priority, cast.Request.Target)
+	}
 }
 
 // castStateToString converts CastState to readable string
@@ -770,6 +957,16 @@ func (ce *CastingEngine) castTypeToString(castType CastType) string {
 		return "NA"
 	case CastTypeSequence:
 		return "SEQUENCE"
+	case CastTypeReraise:
+		return "RERAISE"
+	case CastTypeWhmPrep:
+		return "WHMPREP"
+	case CastTypeProtect:
+		return "PROTECT"
+	case CastTypeShell:
+		return "SHELL"
+	case CastTypeItem:
+		return "ITEM"
 	default:
 		return fmt.Sprintf("UNKNOWN(%d)", int(castType))
 	}
@@ -781,12 +978,10 @@ func (ce *CastingEngine) NotifySpellComplete(requestID string, success bool, err
 	ce.mu.Lock()
 	defer ce.mu.Unlock()
 
-	// Queue debug log removed
-
 	activeCast, exists := ce.activeCasts[requestID]
 	if !exists {
 		log.Printf("Received completion notification for unknown request: %s", requestID)
-		ce.logQueueState("COMPLETION_UNKNOWN_REQUEST", requestID)
+		//ce.logQueueState("COMPLETION_UNKNOWN_REQUEST", requestID)
 		return
 	}
 
@@ -814,15 +1009,16 @@ func (ce *CastingEngine) NotifySpellComplete(requestID string, success bool, err
 			ce.config.SequenceDelay)
 
 		// Log queue state after sequence advancement
-		ce.logQueueState("SEQUENCE_ADVANCED", requestID)
+		//ce.logQueueState("SEQUENCE_ADVANCED", requestID)
 
 		// Reset attempt count for the new spell
 		activeCast.AttemptCount = 0
 		activeCast.State = CastStatePending
 
-		// Execute the next spell in the sequence after a delay
+		// Execute the next spell in the sequence after a small delay
+		// Now that we have real-time ready checks, we can use a much smaller delay
 		go func() {
-			time.Sleep(ce.config.SequenceDelay)
+			time.Sleep(500 * time.Millisecond)
 			ce.processCast(activeCast)
 		}()
 		return
@@ -832,7 +1028,8 @@ func (ce *CastingEngine) NotifySpellComplete(requestID string, success bool, err
 	activeCast.State = CastStateCompleted
 	log.Printf("Spell sequence completed successfully: %s", requestID)
 
-	// Complete the cast now that the entire sequence is done
+	// Final check: remove from active casts immediately after completion
+	// to ensure it doesn't block the concurrent limit
 	go ce.completeCast(activeCast)
 }
 

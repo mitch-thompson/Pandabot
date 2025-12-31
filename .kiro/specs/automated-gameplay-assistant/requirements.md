@@ -19,7 +19,11 @@ The Automated Gameplay Assistant is a system consisting of a Lua addon for Ashit
 - **Echo_Drop**: A consumable item that removes the silence status effect from the player
 - **Silence_Status**: A negative status effect that prevents the player from casting spells
 
+
+- **Decision_Tree**: The logic in the Go_Server that evaluates the current game state upon receiving a ready-for-action signal to determine the next optimal action.
+- **Desired_Buff**: A persistent tracked need for a specific buff on a target, including priority, spell name, and optional expiry.
 ## Requirements
+
 
 ### Requirement 1
 
@@ -30,25 +34,22 @@ The Automated Gameplay Assistant is a system consisting of a Lua addon for Ashit
 1. WHEN the Go_Server sends an Action_Command to the Lua_Addon, THEN the Lua_Addon SHALL execute the command in the game client using Ashita v4's command system
 2. WHEN an Action_Command contains spell casting instructions, THEN the Lua_Addon SHALL parse the spell name and target correctly and execute via Ashita v4's command execution
 3. WHEN an Action_Command is malformed or invalid, THEN the Lua_Addon SHALL log the error using Ashita v4's print functions and continue normal operation
-4. WHEN the Go_Server generates multiple Action_Commands, THEN the Go_Server SHALL prioritize them based on numerical priority (1-100) and only send the next command after the current one completes
+4. WHEN the Go_Server identifies multiple potential actions, THEN the Go_Server SHALL use the Decision_Tree to select and send the highest priority action
 5. WHEN an Action_Command execution fails, THEN the Lua_Addon SHALL report the failure status back to the Go_Server
-6. WHEN multiple spells need to be cast in sequence, THEN the Go_Server SHALL queue commands server-side and only send the next command after receiving completion notification from the Lua_Addon for the previous command
-7. WHEN a spell finishes casting, THEN the Lua_Addon SHALL notify the Go_Server of spell completion to trigger the next queued command
-8. WHEN the Go_Server receives an Action_Command request, THEN it SHALL maintain a master queue of up to 100 commands per client, removing lower priority actions if necessary
-9. WHEN the Go_Server detects that a queued Action_Command is no longer necessary (e.g., target is at full HP, debuff has worn off, or target is dead), THEN the Go_Server SHALL remove that command from the master queue (Queue Garbage Collection)
-
+6. WHEN multiple spells need to be cast in sequence, THEN the Go_Server SHALL use Desired_Buffs with assigned priorities to implicitly sequence actions through repeated Decision_Tree evaluations
+7. WHEN a spell finishes casting, THEN the Lua_Addon SHALL notify the Go_Server of spell completion to allow re-evaluation of the Decision_Tree
+8. WHEN the Go_Server evaluates an action in the Decision_Tree, THEN it SHALL validate if the action is still necessary before generating the Action_Command
 ### Requirement 2
 
 **User Story:** As a player, I want the system to monitor and respond to specific words in tells and party messages, so that appropriate healing and buff spells are automatically cast.
 
 #### Acceptance Criteria
-
 1. WHEN a Party_Member sends a tell (mode 3) or party message (mode 4) containing trigger words, THEN the Lua_Addon SHALL capture only these specific message types using Ashita v4's text event callbacks and forward them to the Go_Server for processing
 2. WHEN the Text_Parser identifies trigger words in a message, THEN the Text_Parser SHALL create a generic trigger event with the trigger type and sender information without performing any spell selection or target resolution
 3. WHEN a trigger event is created, THEN the Go_Server SHALL pass the trigger event to the Casting_System for all spell selection, target resolution, and command generation
 4. WHEN the Casting_System receives a trigger event, THEN the Casting_System SHALL determine appropriate spells, resolve correct targets based on spell requirements, and generate prioritized casting requests
 5. WHEN a trigger word is detected from an unknown player, THEN the Go_Server SHALL ignore the request and log the event
-
+6. WHEN the Text_Parser detects "panda clear" in a message, THEN it SHALL create a clear event that clears all Desired_Buffs, or specific ones if specified (e.g., "panda clear haste" or "panda clear <player>")
 ### Requirement 3
 
 **User Story:** As a player, I want the system to continuously monitor party status using accurate Ashita v4 data, so that proactive healing and status management can be performed.
@@ -61,6 +62,10 @@ The Automated Gameplay Assistant is a system consisting of a Lua addon for Ashit
 4. WHEN a Party_Member has negative status effects, THEN the Go_Server SHALL determine appropriate "na" spell and target
 5. WHEN Status_Messages are not received within expected intervals, THEN the Go_Server SHALL log connection issues and attempt reconnection
 6. WHEN actual HP/MP values are available from Ashita v4, THEN the Go_Server SHALL prioritize these over percentage-based estimates for all healing calculations
+7. WHEN a buff trigger is received, THEN the Go_Server SHALL register Desired_Buffs for the target with associated priorities and spell names
+8. WHEN evaluating actions, THEN the Go_Server SHALL check for missing Desired_Buffs and include them in the Decision_Tree
+9. WHEN a zone change is detected, THEN the Go_Server SHALL clear Desired_Buffs as configured (e.g., all or specific types)
+
 
 ### Requirement 4
 
@@ -68,14 +73,14 @@ The Automated Gameplay Assistant is a system consisting of a Lua addon for Ashit
 
 #### Acceptance Criteria
 
-1. WHEN multiple healing needs are detected simultaneously, THEN the Spell_Prioritizer SHALL rank actions by urgency and importance using a 1-100 numerical scale
-2. WHEN a Party_Member has critically low health (<= 20%), THEN the Spell_Prioritizer SHALL assign a "Higher" priority (value 80) to cure spells
-3. WHEN multiple Party_Members need healing, THEN the Spell_Prioritizer SHALL prioritize based on health percentage and role importance, with non-critical cures (> 20% HP) assigned "Normal" priority (value 40)
-4. WHEN status removal spells are needed, THEN the Spell_Prioritizer SHALL prioritize life-threatening conditions (e.g., Stona, Paralyna, Silena) with "High" priority (value 60) over minor debuffs
-5. WHEN spell casting resources are limited, THEN the Spell_Prioritizer SHALL optimize MP usage and casting efficiency
-6. WHEN utility actions like buffs, Shell, or Protect are needed, THEN the Spell_Prioritizer SHALL assign them "Lowest" priority (value 20)
-7. WHEN an Action_Command is generated, it SHALL include essential metadata: Action, Target, Priority (1-100), ID, and Timestamp
-
+1. WHEN the Lua_Addon sends a ready-for-action signal, THEN the Go_Server SHALL evaluate the Decision_Tree to determine the next action based on current state
+2. WHEN multiple needs are detected, THEN the Decision_Tree SHALL rank actions by urgency using a 1-100 numerical scale, following the order: self-checks (100+), critical heals (80-99), high debuffs (70-89), mid heals (50-69), buffs (30-49), low debuffs (10-29)
+3. WHEN a Party_Member has critically low health (<= 20%), THEN the Decision_Tree SHALL prioritize cure spells at value 80+
+4. WHEN multiple Party_Members need healing, THEN the Decision_Tree SHALL prioritize based on health percentage and role, evaluating Curaga if applicable
+5. WHEN status removal is needed, THEN the Decision_Tree SHALL prioritize severe debuffs at 70+
+6. WHEN buffs are needed, THEN the Decision_Tree SHALL check missing Desired_Buffs and assign priorities (e.g., Reraise 90, Light Arts 80, elemental 60, Protect/Shell 50)
+7. WHEN resources are limited, THEN the Decision_Tree SHALL consider MP and skip if insufficient
+8. WHEN no action is needed, THEN the Decision_Tree SHALL return idle
 ### Requirement 5
 
 **User Story:** As a player, I want the system to determine appropriate cure spell levels using accurate HP data, so that healing is efficient and effective.
@@ -96,13 +101,11 @@ The Automated Gameplay Assistant is a system consisting of a Lua addon for Ashit
 **User Story:** As a player, I want the system to determine appropriate status removal spells, so that negative effects are efficiently removed.
 
 #### Acceptance Criteria
-
 1. WHEN a Party_Member has negative status effects, THEN the Go_Server SHALL identify the specific "na" spell required
 2. WHEN multiple status effects are present, THEN the Go_Server SHALL prioritize removal based on effect severity
 3. WHEN a status effect requires a specific "na" spell, THEN the Go_Server SHALL send the correct Action_Command with proper targeting
-4. WHEN status removal spells are unavailable or insufficient MP exists, THEN the Go_Server SHALL queue the action for later execution
+4. WHEN status removal spells are unavailable or insufficient MP exists, THEN the Go_Server SHALL skip the action in the current Decision_Tree evaluation
 5. WHEN status effects are successfully removed, THEN the Go_Server SHALL update its internal tracking of Party_Member conditions
-
 ### Requirement 7
 
 **User Story:** As a system administrator, I want reliable communication between the Lua plugin and Go server, so that the system operates consistently.
@@ -149,13 +152,11 @@ The Automated Gameplay Assistant is a system consisting of a Lua addon for Ashit
 **User Story:** As a player, I want the system to prioritize using echo drops when I am silenced, so that I can regain the ability to cast spells immediately.
 
 #### Acceptance Criteria
-
 1. WHEN the player has the silence status effect, THEN the Go_Server SHALL prioritize using an echo drop above all other actions including healing and buffing, assigning it the "Highest" priority (value 100)
 2. WHEN the player is silenced and an echo drop is available in inventory, THEN the Go_Server SHALL immediately send an Action_Command to use the echo drop
 3. WHEN the player is silenced and no echo drop is available, THEN the Go_Server SHALL log the unavailability and continue with other priority actions
-4. WHEN the silence status effect is detected on the player, THEN the Go_Server SHALL interrupt any current casting queue to prioritize the echo drop usage
+4. WHEN the silence status effect is detected on the player, THEN the Go_Server SHALL prioritize it in the Decision_Tree above current actions
 5. WHEN an echo drop is successfully used to remove silence, THEN the Go_Server SHALL resume normal spell casting operations and update its internal status tracking
-
 ### Requirement 11
 
 **User Story:** As a developer, I want the system to be fully compatible with Ashita v4, so that it works reliably with the current Ashita architecture.
