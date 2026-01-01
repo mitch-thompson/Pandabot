@@ -6,13 +6,13 @@ import (
 
 func TestTargetResolution(t *testing.T) {
 	engine := NewCastingEngine(DefaultCastingConfig())
-	
+
 	context := &CastContext{
-		CasterName: "TestCaster",
-		CasterMP:   300,
+		CasterName:      "TestCaster",
+		CasterMP:        300,
 		CasterJobLevels: map[string]int{"WHM": 75},
 	}
-	
+
 	// Test self-targeting spells (area spells)
 	testCases := []struct {
 		spellName      string
@@ -56,20 +56,44 @@ func TestTargetResolution(t *testing.T) {
 			expectedTarget: "TestCaster",
 			description:    "Bar spell should target caster (self-only)",
 		},
+		{
+			spellName:      "Light Arts",
+			originalTarget: "SomePlayer",
+			expectedTarget: "TestCaster",
+			description:    "Light Arts should target caster",
+		},
+		{
+			spellName:      "Afflatus Solace",
+			originalTarget: "SomePlayer",
+			expectedTarget: "TestCaster",
+			description:    "Afflatus Solace should target caster",
+		},
+		{
+			spellName:      "Auspice",
+			originalTarget: "SomePlayer",
+			expectedTarget: "TestCaster",
+			description:    "Auspice should target caster",
+		},
+		{
+			spellName:      "Reraise III",
+			originalTarget: "SomePlayer",
+			expectedTarget: "TestCaster",
+			description:    "Reraise should target caster",
+		},
 	}
-	
+
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
 			resolvedTarget, err := engine.resolveSpellTarget(tc.spellName, tc.originalTarget, context)
 			if err != nil {
 				t.Fatalf("Failed to resolve target for %s: %v", tc.spellName, err)
 			}
-			
+
 			if resolvedTarget != tc.expectedTarget {
-				t.Errorf("Target resolution failed for %s: expected %s, got %s", 
+				t.Errorf("Target resolution failed for %s: expected %s, got %s",
 					tc.spellName, tc.expectedTarget, resolvedTarget)
 			}
-			
+
 			t.Logf("✓ %s: %s -> %s", tc.spellName, tc.originalTarget, resolvedTarget)
 		})
 	}
@@ -77,45 +101,45 @@ func TestTargetResolution(t *testing.T) {
 
 func TestTargetResolutionFallback(t *testing.T) {
 	engine := NewCastingEngine(DefaultCastingConfig())
-	
+
 	// Test with no caster name (should fallback to "me")
 	context := &CastContext{
-		CasterName: "", // Empty caster name
-		CasterMP:   300,
+		CasterName:      "", // Empty caster name
+		CasterMP:        300,
 		CasterJobLevels: map[string]int{"WHM": 75},
 	}
-	
+
 	resolvedTarget, err := engine.resolveSpellTarget("Protectra III", "SomePlayer", context)
 	if err != nil {
 		t.Fatalf("Failed to resolve target: %v", err)
 	}
-	
+
 	if resolvedTarget != "me" {
 		t.Errorf("Expected fallback to 'me', got %s", resolvedTarget)
 	}
-	
+
 	t.Logf("✓ Fallback working: empty caster name -> 'me'")
 }
 
 func TestTargetResolutionWithActualSpellData(t *testing.T) {
 	engine := NewCastingEngine(DefaultCastingConfig())
-	
+
 	context := &CastContext{
-		CasterName: "TestCaster",
-		CasterMP:   300,
+		CasterName:      "TestCaster",
+		CasterMP:        300,
 		CasterJobLevels: map[string]int{"WHM": 75},
 	}
-	
+
 	// Test with actual cure spell that has proper target flags
 	resolvedTarget, err := engine.resolveSpellTarget("Cure", "InjuredPlayer", context)
 	if err != nil {
 		t.Fatalf("Failed to resolve target for Cure: %v", err)
 	}
-	
+
 	// Cure should target the original target since it's TargetAlly (not TargetSelf)
 	if resolvedTarget != "InjuredPlayer" {
 		t.Errorf("Cure should target original target, got %s", resolvedTarget)
 	}
-	
+
 	t.Logf("✓ Cure spell targeting: InjuredPlayer -> %s", resolvedTarget)
 }

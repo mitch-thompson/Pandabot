@@ -1,10 +1,12 @@
 package autoActionService
 
 import (
-	"log"
+	"fmt"
+	"sort"
 
 	"PandaBot/internal/casting"
 	"PandaBot/internal/entity"
+	"PandaBot/internal/protocol"
 	"PandaBot/internal/statusMonitor"
 )
 
@@ -20,146 +22,290 @@ func NewAutoActionService(castingSystem *casting.CastingServerIntegration) *Auto
 	}
 }
 
-// ProcessAutomaticActions checks for actions based on current party status
-func (aas *AutoActionService) ProcessAutomaticActions(statusMonitor *statusMonitor.StatusMonitor) {
-	actions := statusMonitor.CheckForActions()
-
-	if len(actions) == 0 {
-		return
+// DecideNextAction determines the next action for a client based on the decision tree
+func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMonitor.StatusMonitor) (*protocol.ExecuteCommand, string, error) {
+	// 1. Am I silenced? -- echo drop
+	for _, statusID := range sm.PlayerStatus {
+		if statusID == 6 || statusID == 10 { // Silence IDs
+			if sm.EchoDropCount > 0 {
+				return &protocol.ExecuteCommand{
+					Command: "/item \"Echo Drops\" <me>",
+				}, "Silenced - Using Echo Drops", nil
+			}
+			// If silenced and no echo drops, we might be stuck, but for now just drop
+			return nil, "Silenced - No Echo Drops", nil
+		}
 	}
 
-	log.Printf("Automatic actions triggered: %d", len(actions))
+	partyMap := sm.GetAllPartyMembers()
+	partyEntities := buildPartyEntities(sm)
 
-	// Use centralized casting system for automatic actions
-	castingHelper := aas.castingSystem.GetCastingHelper()
+	// Get caster info
+	client := aas.findClientByName(playerName)
+	if client == nil {
+		return nil, "", fmt.Errorf("client %s not found", playerName)
+	}
+	clientInfo := client.GetClientInfo()
 
-	for _, action := range actions {
-		switch action.Type {
-		case "cure":
-			// Use centralized cure casting
-			member, exists := statusMonitor.GetPartyMember(action.Target)
-			if !exists {
-				continue
-			}
+	// 2. Is anyone critical? -- if yes Are more than 1 person critical -- critical cure or curaga
+	criticalMembers := make([]*statusMonitor.PartyMember, 0)
+	for _, member := range partyMap {
+		if sm.GetHealthThreshold(member.HPPercent) == "critical" {
+			criticalMembers = append(criticalMembers, member)
+		}
+	}
 
-			// Calculate missing HP using actual values if available
-			var missingHP int
-			if member.HPMax > 0 && member.HPActual >= 0 {
-				missingHP = member.HPMax - member.HPActual
-				log.Printf("[AUTO CURE DEBUG] Using actual HP values: %d/%d HP, missing %d",
-					member.HPActual, member.HPMax, missingHP)
-			} else {
-				// Fallback to percentage-based calculation
-				missingHP = 100 - member.HPPercent
-				log.Printf("[AUTO CURE DEBUG] Using percentage fallback: %d%% HP, missing %d%%",
-					member.HPPercent, missingHP)
-			}
+	if len(criticalMembers) > 0 {
+		// Use casting engine to select optimal cure (it handles Curaga vs Cure)
+		// We need to pick one target to evaluate from
+		target := criticalMembers[0].Name
+		missingHP := criticalMembers[0].HPMax - criticalMembers[0].HPActual
+		if criticalMembers[0].HPMax == 0 {
+			missingHP = 100 - criticalMembers[0].HPPercent
+		}
 
-			// Get client info for casting context
-			connectedClients := aas.castingSystem.GetClientManager().GetConnectedClients()
-			if len(connectedClients) == 0 {
-				log.Printf("No connected clients available for automatic cure casting")
-				continue
-			}
-
-			// Use first available client's info
-			var clientInfo *casting.ClientInfo
-			for _, client := range connectedClients {
-				clientInfo = client.GetClientInfo()
+		// Find the entity for the target
+		var targetEntity *entity.Entity
+		for _, e := range partyEntities {
+			if e.Name == target {
+				targetEntity = e
 				break
 			}
+		}
 
-			if clientInfo == nil {
-				continue
+		cureOption, err := aas.castingSystem.GetCastingEngine().SelectOptimalCure(&casting.CastContext{
+			MissingHP:       missingHP,
+			CasterMP:        clientInfo.MP,
+			CasterJobLevels: clientInfo.JobLevels,
+			TargetEntity:    targetEntity,
+			PartyMembers:    partyEntities,
+			PartySize:       len(partyEntities),
+		})
+
+		if err == nil {
+			return &protocol.ExecuteCommand{
+				Command: fmt.Sprintf("/ma \"%s\" %s", cureOption.SpellName, target),
+			}, fmt.Sprintf("Critical Cure: %s on %s", cureOption.SpellName, target), nil
+		}
+	}
+
+	// 3. Any high priority debuffs? -- remove those (Severity 3 or 4)
+	for _, member := range partyMap {
+		effect := sm.GetMostSevereStatusEffect(member)
+		if effect != nil && effect.Severity >= 3 {
+			spellName := effect.SpellID // This is currently mapped to spell name in GetMostSevereStatusEffect
+			// Check if we have a better name via naSelector
+			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaSpell(&casting.CastContext{
+				CasterMP:        clientInfo.MP,
+				CasterJobLevels: clientInfo.JobLevels,
+				StatusEffects:   member.StatusIDs,
+			}); err == nil && opt != "" {
+				spellName = opt
 			}
 
-			// Build party member context so Curaga efficiency can be evaluated
-			partyEntities := buildPartyEntities(statusMonitor)
+			return &protocol.ExecuteCommand{
+				Command: fmt.Sprintf("/ma \"%s\" %s", spellName, member.Name),
+			}, fmt.Sprintf("High priority debuff: %s on %s", effect.Name, member.Name), nil
+		}
+	}
 
-			requestID, err := castingHelper.CastCureByDamage(
-				action.Target,
-				missingHP,
-				clientInfo.MP,
-				clientInfo.JobLevels,
-				action.Priority,
-				partyEntities,
-			)
+	// 4. Mid priority cures? (Low threshold)
+	lowHPMembers := make([]*statusMonitor.PartyMember, 0)
+	for _, member := range partyMap {
+		if sm.GetHealthThreshold(member.HPPercent) == "low" {
+			lowHPMembers = append(lowHPMembers, member)
+		}
+	}
 
-			if err != nil {
-				log.Printf("Failed to queue automatic cure for %s: %v", action.Target, err)
-			} else {
-				log.Printf("Queued automatic cure for %s (request ID: %s)", action.Target, requestID)
-			}
+	if len(lowHPMembers) > 0 {
+		target := lowHPMembers[0].Name
+		missingHP := lowHPMembers[0].HPMax - lowHPMembers[0].HPActual
+		if lowHPMembers[0].HPMax == 0 {
+			missingHP = 100 - lowHPMembers[0].HPPercent
+		}
 
-		case "na_spell":
-			// Use centralized na spell casting
-			member, exists := statusMonitor.GetPartyMember(action.Target)
-			if !exists {
-				continue
-			}
-
-			// Get client info for casting context
-			connectedClients := aas.castingSystem.GetClientManager().GetConnectedClients()
-			if len(connectedClients) == 0 {
-				log.Printf("No connected clients available for automatic na spell casting")
-				continue
-			}
-
-			// Use first available client's info
-			var clientInfo *casting.ClientInfo
-			for _, client := range connectedClients {
-				clientInfo = client.GetClientInfo()
+		// Find the entity for the target
+		var targetEntity *entity.Entity
+		for _, e := range partyEntities {
+			if e.Name == target {
+				targetEntity = e
 				break
 			}
+		}
 
-			if clientInfo == nil {
-				continue
+		cureOption, err := aas.castingSystem.GetCastingEngine().SelectOptimalCure(&casting.CastContext{
+			MissingHP:       missingHP,
+			CasterMP:        clientInfo.MP,
+			CasterJobLevels: clientInfo.JobLevels,
+			TargetEntity:    targetEntity,
+			PartyMembers:    partyEntities,
+			PartySize:       len(partyEntities),
+		})
+
+		if err == nil {
+			return &protocol.ExecuteCommand{
+				Command: fmt.Sprintf("/ma \"%s\" %s", cureOption.SpellName, target),
+			}, fmt.Sprintf("Mid priority cure: %s on %s", cureOption.SpellName, target), nil
+		}
+	}
+
+	// 5. Missing desired buffs? (sorted by priority)
+	var missingBuffs []struct {
+		member *statusMonitor.PartyMember
+		id     int
+		buff   statusMonitor.DesiredBuff
+	}
+
+	for _, member := range partyMap {
+		for id, buff := range member.DesiredBuffs {
+			// Determine who should be monitored for this buff
+			monitoredMember := member
+
+			// Resolve spell to check its targeting
+			spellName := buff.SpellName
+			if spellName == "reraise" {
+				if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalReraise(clientInfo.JobLevels, clientInfo.MP); err == nil {
+					spellName = opt.SpellName
+				}
+			} else if spellName == "protect" {
+				if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalProtect(&casting.CastContext{
+					CasterMP:        clientInfo.MP,
+					CasterJobLevels: clientInfo.JobLevels,
+					PartySize:       sm.GetPartyCount(),
+				}); err == nil {
+					spellName = opt.SpellName
+				}
+			} else if spellName == "shell" {
+				if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalShell(&casting.CastContext{
+					CasterMP:        clientInfo.MP,
+					CasterJobLevels: clientInfo.JobLevels,
+					PartySize:       sm.GetPartyCount(),
+				}); err == nil {
+					spellName = opt.SpellName
+				}
 			}
 
-			// Convert member status effects to int slice
-			var statusEffects []int
-			for _, effect := range member.StatusIDs {
-				statusEffects = append(statusEffects, effect)
+			// Check if this spell is TargetSelf
+			if resolvedTarget, err := aas.castingSystem.GetCastingEngine().ResolveSpellTarget(spellName, member.Name, &casting.CastContext{
+				CasterName: playerName,
+			}); err == nil && (resolvedTarget == playerName || resolvedTarget == "<me>") {
+				// For TargetSelf spells, we monitor the caster
+				if caster, exists := partyMap[playerName]; exists {
+					monitoredMember = caster
+				} else {
+					// If caster is not in partyMap, we can't monitor them, so skip this buff
+					continue
+				}
 			}
 
-			requestID, err := castingHelper.CastNaSpell(
-				action.Target,
-				statusEffects,
-				clientInfo.MP,
-				clientInfo.JobLevels,
-				action.Priority,
-			)
+			// SPECIAL CASE: Check if this is a "reraise" buff (ID 113)
+			// Status ID 113 is for Reraise, but there's also Reraise II (ID 129) and Reraise III (ID 141)
+			// We need to check if the player HAS ANY Reraise status, not just the base ID.
+			isReraiseBuff := (id == 113 || id == 129 || id == 141)
 
-			if err != nil {
-				log.Printf("Failed to queue automatic na spell for %s: %v", action.Target, err)
-			} else {
-				log.Printf("Queued automatic na spell for %s (request ID: %s)", action.Target, requestID)
+			hasBuff := false
+			for _, currentID := range monitoredMember.StatusIDs {
+				if currentID == id {
+					hasBuff = true
+					break
+				}
+				// If we are looking for reraise and have ANY reraise, it counts
+				if isReraiseBuff && (currentID == 113 || currentID == 129 || currentID == 141) {
+					hasBuff = true
+					break
+				}
 			}
-
-		case "echo_drop":
-			requestID, err := castingHelper.UseEchoDrop(action.Priority)
-			if err != nil {
-				log.Printf("Failed to use echo drop: %v", err)
-			} else {
-				log.Printf("Queued echo drop usage (request ID: %s)", requestID)
-			}
-
-		case "manual_spell":
-			// For desired buffs that are missing, add back into the queue
-			partyEntities := buildPartyEntities(statusMonitor)
-			requestIDs := aas.castingSystem.ProcessTriggerEvent(
-				action.Spell,
-				action.Target,
-				action.Priority,
-				partyEntities,
-			)
-			if len(requestIDs) == 0 {
-				log.Printf("Failed to queue missing buff %s for %s", action.Spell, action.Target)
-			} else {
-				log.Printf("Queued missing buff %s for %s (request IDs: %v)", action.Spell, action.Target, requestIDs)
+			if !hasBuff {
+				missingBuffs = append(missingBuffs, struct {
+					member *statusMonitor.PartyMember
+					id     int
+					buff   statusMonitor.DesiredBuff
+				}{member, id, buff})
 			}
 		}
 	}
+
+	if len(missingBuffs) > 0 {
+		// Sort by priority descending
+		sort.Slice(missingBuffs, func(i, j int) bool {
+			return missingBuffs[i].buff.Priority > missingBuffs[j].buff.Priority
+		})
+
+		topBuff := missingBuffs[0]
+		// Determine initial target
+		target := topBuff.member.Name
+		spellName := topBuff.buff.SpellName
+
+		// Handle spell resolution for generic names like "reraise", "protect", etc.
+		if spellName == "reraise" {
+			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalReraise(clientInfo.JobLevels, clientInfo.MP); err == nil {
+				spellName = opt.SpellName
+			}
+		} else if spellName == "protect" {
+			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalProtect(&casting.CastContext{
+				CasterMP:        clientInfo.MP,
+				CasterJobLevels: clientInfo.JobLevels,
+				PartySize:       sm.GetPartyCount(),
+			}); err == nil {
+				spellName = opt.SpellName
+			}
+		} else if spellName == "shell" {
+			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalShell(&casting.CastContext{
+				CasterMP:        clientInfo.MP,
+				CasterJobLevels: clientInfo.JobLevels,
+				PartySize:       sm.GetPartyCount(),
+			}); err == nil {
+				spellName = opt.SpellName
+			}
+		}
+
+		// Re-resolve target based on the final spell name (handles TargetSelf, etc.)
+		if resolvedTarget, err := aas.castingSystem.GetCastingEngine().ResolveSpellTarget(spellName, target, &casting.CastContext{
+			CasterName: "<me>", // autoActionService always assumes caster is <me> for command generation
+		}); err == nil {
+			target = resolvedTarget
+		}
+
+		return &protocol.ExecuteCommand{
+			Command: fmt.Sprintf("/ma \"%s\" %s", spellName, target),
+		}, fmt.Sprintf("Buffing: %s on %s", spellName, target), nil
+	}
+
+	// 6. Low priority debuffs to remove? (Severity 2)
+	for _, member := range partyMap {
+		effect := sm.GetMostSevereStatusEffect(member)
+		if effect != nil && effect.Severity == 2 {
+			spellName := effect.SpellID
+			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaSpell(&casting.CastContext{
+				CasterMP:        clientInfo.MP,
+				CasterJobLevels: clientInfo.JobLevels,
+				StatusEffects:   member.StatusIDs,
+			}); err == nil && opt != "" {
+				spellName = opt
+			}
+			return &protocol.ExecuteCommand{
+				Command: fmt.Sprintf("/ma \"%s\" %s", spellName, member.Name),
+			}, fmt.Sprintf("Low priority debuff: %s on %s", effect.Name, member.Name), nil
+		}
+	}
+
+	return nil, "Idle", nil
+}
+
+func (aas *AutoActionService) findClientByName(name string) casting.ClientInterface {
+	clients := aas.castingSystem.GetClientManager().GetConnectedClients()
+	for _, client := range clients {
+		info := client.GetClientInfo()
+		if info != nil && info.PlayerName == name {
+			return client
+		}
+	}
+	return nil
+}
+
+// ProcessAutomaticActions is now deprecated in favor of DecideNextAction called from the server
+func (aas *AutoActionService) ProcessAutomaticActions(statusMonitor *statusMonitor.StatusMonitor) {
+	// No-op, functionality moved to DecideNextAction
 }
 
 // buildPartyEntities converts the status monitor's party view into entity.Entity list

@@ -453,23 +453,20 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 	allSpells = append(allSpells, hasteSpells...)
 	allSpells = append(allSpells, whmPrepSpells...)
 
+	bs.protectSpells = make([]*spell.Spell, 0)
+	bs.shellSpells = make([]*spell.Spell, 0)
+	bs.barSpells = make([]*spell.Spell, 0)
+
 	for _, buffSpell := range allSpells {
 		bs.spellDatabase[buffSpell.English] = buffSpell
 
-		// Categorize spells
-		if buffSpell.English == "Protect" || buffSpell.English == "Protect II" ||
-			buffSpell.English == "Protect III" || buffSpell.English == "Protect IV" ||
-			buffSpell.English == "Protect V" || buffSpell.English == "Protectra" ||
-			buffSpell.English == "Protectra II" || buffSpell.English == "Protectra III" ||
-			buffSpell.English == "Protectra IV" || buffSpell.English == "Protectra V" {
+		// Categorize spells based on name patterns
+		name := buffSpell.English
+		if strings.HasPrefix(name, "Protect") {
 			bs.protectSpells = append(bs.protectSpells, buffSpell)
-		} else if buffSpell.English == "Shell" || buffSpell.English == "Shell II" ||
-			buffSpell.English == "Shell III" || buffSpell.English == "Shell IV" ||
-			buffSpell.English == "Shell V" || buffSpell.English == "Shellra" ||
-			buffSpell.English == "Shellra II" || buffSpell.English == "Shellra III" ||
-			buffSpell.English == "Shellra IV" || buffSpell.English == "Shellra V" {
+		} else if strings.HasPrefix(name, "Shell") {
 			bs.shellSpells = append(bs.shellSpells, buffSpell)
-		} else {
+		} else if strings.HasPrefix(name, "Bar") {
 			bs.barSpells = append(bs.barSpells, buffSpell)
 		}
 	}
@@ -729,11 +726,36 @@ func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[st
 		if err == nil && barOption != nil {
 			log.Printf("[BUFF DEBUG] Selected Bar spell: %s (MP: %d)", barOption.SpellName, barOption.MPCost)
 			sequence = append(sequence, barOption)
+			availableMP -= barOption.MPCost
 		} else {
 			log.Printf("[BUFF DEBUG] Failed to select Bar spell for %s: %v", element, err)
 		}
 	} else {
 		log.Printf("[BUFF DEBUG] Unknown buff type: %s", buffType)
+	}
+
+	// Add Reraise if available and not already in sequence
+	reraiseOption, err := bs.SelectOptimalReraise(jobLevels, availableMP)
+	if err == nil && reraiseOption != nil {
+		log.Printf("[BUFF DEBUG] Selected Reraise: %s (MP: %d)", reraiseOption.SpellName, reraiseOption.MPCost)
+		sequence = append(sequence, reraiseOption)
+		availableMP -= reraiseOption.MPCost
+	}
+
+	// Add Auspice if WHM 50+
+	if level, exists := jobLevels["WHM"]; exists && level >= 50 {
+		auspiceSpell := bs.spellDatabase["Auspice"]
+		if auspiceSpell != nil && int(auspiceSpell.MPCost) <= availableMP {
+			log.Printf("[BUFF DEBUG] Selected Auspice (MP: %d)", auspiceSpell.MPCost)
+			sequence = append(sequence, &BuffOption{
+				SpellName:  auspiceSpell.English,
+				Spell:      auspiceSpell,
+				MPCost:     int(auspiceSpell.MPCost),
+				CastTime:   auspiceSpell.CastTime,
+				Efficiency: 1.0 / float64(auspiceSpell.MPCost),
+			})
+			availableMP -= int(auspiceSpell.MPCost)
+		}
 	}
 
 	log.Printf("[BUFF DEBUG] Final sequence length: %d", len(sequence))

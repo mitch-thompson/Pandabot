@@ -233,6 +233,7 @@ local disconnect_at = 0
 local reconnect_attempts = 0
 local last_reconnect_attempt = 0
 local message_queue = {} -- Queue messages during disconnection
+local party_buffs = {}
 
 -- Party status tracking (packet-based)
 local party_statuses = {}
@@ -592,6 +593,49 @@ ashita.events.register('packet_in', 'pandabot_packet', function(e)
 	end
 end)
 
+-- Packet handler for party buffs (0x076)
+ashita.events.register('packet_in', 'pandabot_packet_party_buffs', function(e)
+	if e.id ~= 0x076 or e.size ~= 0xF4 then return end
+
+	local data = e.data
+	for k = 0, 4 do
+		local id_pos = k*0x30 + 0x04 + 1
+		local id = struct.unpack('I', data, id_pos)
+		if id and id ~= 0 then
+			party_buffs[id] = {buffs = {}}
+			for i = 0, 31 do
+				local low = struct.unpack('B', data, k*0x30 + i + 0x14 + 1)
+				local mask_byte = struct.unpack('B', data, k*0x30 + i/4 + 0x0C + 1)
+				local mask = bit.band(bit.rshift(mask_byte, (i % 4) * 2), 3)
+				local buff_id = low + 256 * mask
+				if buff_id ~= 255 and buff_id > 0 and buff_id < 1024 then
+					table.insert(party_buffs[id].buffs, buff_id)
+				end
+			end
+		end
+	end
+end)
+
+-- Packet handler for self buffs (0x063 type 9)
+ashita.events.register('packet_in', 'pandabot_packet_self_buffs', function(e)
+	if e.id ~= 0x063 or e.size < 0x4C then return end
+
+	local data = e.data
+	if struct.unpack('B', data, 5) == 9 then  -- Subtype 9: buffs
+		local self_id = AshitaCore:GetMemoryManager():GetParty():GetMemberServerId(0)
+		if self_id and self_id ~= 0 then
+			party_buffs[self_id] = {buffs = {}}
+			for i = 0, 31 do
+				local pos = 9 + i * 2
+				local buff_id = struct.unpack('H', data, pos)
+				if buff_id ~= 0xFFFF and buff_id ~= 255 and buff_id > 0 and buff_id < 1024 then
+					table.insert(party_buffs[self_id].buffs, buff_id)
+				end
+			end
+		end
+	end
+end)
+
 
 ----------------------------------------------------------------------------------------------------
 -- Get status effects for party member using multiple methods
@@ -805,121 +849,50 @@ end
 ----------------------------------------------------------------------------------------------------
 -- Send status update using Ashita v4 APIs
 ----------------------------------------------------------------------------------------------------
+-- Updated send_status_update function
 function send_status_update()
-	if not entity or not party then
-		return -- APIs not initialized yet
-	end
+	local party_mgr = AshitaCore:GetMemoryManager():GetParty()
+	local body = {
+		Timestamp = os.time(),
+		PlayerName = party_mgr:GetMemberName(0),
+		Zone = party_mgr:GetMemberZone(0),
+		Members = {}
+	}
 
-	local success, err = pcall(function()
-	-- In send_status_update(), replace the party_members loop with this improved version:
-
-		local party_members = {}
-
-		for i = 0, 17 do
-			local server_id = party:GetMemberServerId(i)
-			if server_id and server_id > 0 then
-				local member_name = party:GetMemberName(i)
-				if member_name and member_name ~= "" then
-					local zone = party:GetMemberZone(i) or 0
-					local player_zone = party:GetMemberZone(0) or 0
-
-					-- Only process if in same zone and HP > 0
-					if zone == player_zone then
-						local hp_percent = party:GetMemberHPPercent(i) or 0
-						if hp_percent > 0 then
-							local hp_actual = party:GetMemberHP(i) or 0
-							local mp_actual = party:GetMemberMP(i) or 0
-
-							local hp_max = (hp_percent > 0) and math.floor(hp_actual * 100 / hp_percent + 0.5) or 0
-							local mp_percent = party:GetMemberMPPercent(i) or 0
-							local mp_max = (mp_percent > 0) and math.floor(mp_actual * 100 / mp_percent + 0.5) or 0
-
-							local status_effects = get_member_status_effects(i)
-
-							local main_job = party:GetMemberMainJob(i) or 0
-
-							local distance = 0
-							local target_index = party:GetMemberTargetIndex(i)
-							if target_index and target_index > 0 then
-								distance = entity:GetDistance(target_index) or 0
-							end
-
-							table.insert(party_members, {
-								name = member_name,
-								index = i,  -- optional: include slot index for debugging
-								hp_percent = hp_percent,
-								mp_percent = mp_percent,
-								hp_actual = hp_actual,
-								hp_max = hp_max,
-								mp_actual = mp_actual,
-								mp_max = mp_max,
-								status_effects = status_effects,
-								job = main_job,
-								distance = distance,
-								zone = zone,
-								last_update = os.time()
-							})
-						else
-							debug_log(string.format('Skipping member %d (%s) - HP%% <= 0', i, member_name))
-						end
-					else
-						debug_log(string.format('Skipping member %d (%s) - different zone (%d vs %d)', i, member_name, zone, player_zone))
-					end
-				end
+	for i = 0, 17 do
+		local name = party_mgr:GetMemberName(i)
+		if name ~= nil and name ~= "" then  -- Loosened check for inclusion
+			local server_id = party_mgr:GetMemberServerId(i)
+			local buffs_list = {}
+			if party_buffs[server_id] and party_buffs[server_id].buffs then
+				buffs_list = party_buffs[server_id].buffs
+				table.sort(buffs_list)
 			end
-		end
 
-		-- Get player info using v4 methods (player is always index 0)
-		local player_hp_percent = party:GetMemberHPPercent(0) or 0
-		local player_mp_percent = party:GetMemberMPPercent(0) or 0
-		local player_zone = party:GetMemberZone(0) or 0
-
-		-- Get actual current HP/MP values from Ashita v4 MemoryManager
-		-- Use the player manager to get current values, not percentages
-		local party = AshitaCore:GetMemoryManager():GetParty()
-
-		local player_hp_actual = party:GetMemberHP(0)     -- Current HP (actual)
-		local player_mp_actual = party:GetMemberMP(0)     -- Current MP (actual)
-
-		-- Get job levels
-		local job_levels = {}
-
-		local main_job_id = party:GetMemberMainJob(0) or 0
-		local sub_job_id = party:GetMemberSubJob(0) or 0
-		local main_job_level = party:GetMemberMainJobLevel(0) or 0  -- Change to 0 if unknown
-		local sub_job_level = party:GetMemberSubJobLevel(0) or 0
-
-		local main_job_name = get_job_name(main_job_id) or "UNK"
-		local sub_job_name = get_job_name(sub_job_id) or "UNK"
-
-		-- Always include main job, even if "NONE" or "UNK"
-		job_levels[main_job_name] = main_job_level
-
-		-- Only include subjob if level > 0 (meaning it's unlocked/active)
-		if sub_job_level > 0 then
-			job_levels[sub_job_name] = sub_job_level
-		end
-
-		debug_log('Job levels built: main=' .. main_job_name .. '/' .. main_job_level .. ', sub=' .. sub_job_name .. '/' .. sub_job_level)
-
-		local status_msg = {
-			type = 21, -- TypeStatusUpdate
-			body = {
-				timestamp = os.time(),
-				party_members = party_members,
-				player_mp = player_mp_actual,  -- Send actual MP, not percentage
-				player_hp = player_hp_actual,  -- Send actual HP, not percentage
-				zone = player_zone,
-				job_levels = job_levels  -- Add job levels
+			local member = {
+				Name = name,
+				HPPercent = party_mgr:GetMemberHPPercent(i),
+				MPPercent = party_mgr:GetMemberMPPercent(i),
+				HPActual = party_mgr:GetMemberHP(i),
+				MPActual = party_mgr:GetMemberMP(i),
+				Job = party_mgr:GetMemberMainJob(i),
+				Zone = party_mgr:GetMemberZone(i),
+				StatusEffects = buffs_list  -- Sorted array of buff IDs
 			}
-		}
-
-		send(status_msg)
-	end)
-
-	if not success then
-		print(COLOR_RED .. '[PandaBot Error] ' .. COLOR_DEFAULT .. 'Error in status update: ' .. tostring(err))
+			table.insert(body.Members, member)
+		end
 	end
+
+	local msg = {
+		Type = 21,
+		Body = body
+	}
+
+	-- Send JSON with length prefix
+	local json_lib = require('json')
+	local json_str = json_lib.encode(msg)
+	local length_packed = struct.pack('>I', #json_str)
+	sock:send(length_packed .. json_str)
 end
 
 

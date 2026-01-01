@@ -20,6 +20,8 @@ type TriggerEvent struct {
 	TriggerType string // Type of trigger (e.g., "stoned", "firebuffs", "heal")
 	Sender      string // Player who sent the trigger message
 	Priority    int    // Priority level (1-10)
+	Target      string // Optional specific target
+	Arg         string // Optional argument (e.g., spell name)
 }
 
 // TextParser analyzes chat messages for trigger words and creates generic trigger events
@@ -121,6 +123,22 @@ func (tp *TextParser) ParseMessage(chatLine *protocol.ChatLine) ([]TriggerEvent,
 				Sender:      effectiveSender,
 				Priority:    priority,
 			}
+
+			// Special handling for "panda clear"
+			if trigger == "panda" {
+				if strings.Contains(normalizedMessage, "panda clear") {
+					event.TriggerType = "panda clear"
+					words := strings.Fields(normalizedMessage)
+					for i, word := range words {
+						if word == "clear" && i+1 < len(words) {
+							// Check if next word is a player name or spell name
+							// For now, just capture it as Arg
+							event.Arg = words[i+1]
+						}
+					}
+				}
+			}
+
 			events = append(events, event)
 		}
 	}

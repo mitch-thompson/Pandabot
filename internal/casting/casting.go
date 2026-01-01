@@ -82,6 +82,7 @@ type CastContext struct {
 	StatusEffects   []int
 	BuffType        string // For buff casting
 	MissingHP       int    // For cure casting
+	OriginalTarget  string // Added to preserve original target across sequence steps
 }
 
 // ActiveCast tracks an ongoing casting operation
@@ -179,6 +180,11 @@ func (ce *CastingEngine) RequestCast(request *CastRequest) error {
 	if err := ce.validateRequest(request); err != nil {
 		ce.mu.Unlock()
 		return fmt.Errorf("invalid cast request: %v", err)
+	}
+
+	// Preserve original target in context for sequences
+	if request.Context != nil && request.Context.OriginalTarget == "" {
+		request.Context.OriginalTarget = request.Target
 	}
 
 	// Check concurrent cast limit
@@ -604,8 +610,12 @@ func (ce *CastingEngine) resolveSpellTarget(spellName string, originalTarget str
 	}
 
 	// Fallback to naming patterns for unknown spells
-	if ce.isAreaSpellByName(spellName) {
-		// Area spells must target the caster
+	lowerName := strings.ToLower(spellName)
+	if ce.isAreaSpellByName(spellName) ||
+		lowerName == "light arts" || lowerName == "dark arts" ||
+		lowerName == "afflatus solace" || lowerName == "afflatus misery" ||
+		lowerName == "auspice" || strings.Contains(lowerName, "reraise") {
+		// These must target the caster
 		if context.CasterName != "" {
 			return context.CasterName, nil
 		}
@@ -618,8 +628,15 @@ func (ce *CastingEngine) resolveSpellTarget(spellName string, originalTarget str
 
 // resolveTargetByFlags resolves target based on spell target flags
 func (ce *CastingEngine) resolveTargetByFlags(targetFlags spell.TargetFlags, originalTarget string, context *CastContext) (string, error) {
-	// If spell can only target self, use caster name
-	if targetFlags == spell.TargetSelf {
+	// If spell can ONLY target self (and not other players), use caster name
+	// TargetSelf is often combined with other flags for spells that CAN target others but can also be cast on self.
+	// But in FFXI, area spells like Protectra have ONLY TargetSelf (and maybe TargetAoE).
+	// Single target spells have TargetSelf | TargetPartyMember | TargetPlayer.
+
+	// A spell is "self-only" if it HAS TargetSelf AND NOT (TargetPartyMember OR TargetPlayer OR TargetEnemy)
+	isSelfOnly := (targetFlags&spell.TargetSelf != 0) && (targetFlags&(spell.TargetPartyMember|spell.TargetPlayer|spell.TargetEnemy) == 0)
+
+	if isSelfOnly {
 		if context.CasterName != "" {
 			return context.CasterName, nil
 		}
@@ -635,12 +652,13 @@ func (ce *CastingEngine) resolveTargetByFlags(targetFlags spell.TargetFlags, ori
 // This is a fallback method and should be replaced with proper spell metadata lookup
 func (ce *CastingEngine) isAreaSpellByName(spellName string) bool {
 	// Area spells in FFXI have predictable naming patterns
-	return strings.HasSuffix(spellName, "ra") || // Protectra, Shellra, etc.
-		strings.HasSuffix(spellName, "ra II") ||
-		strings.HasSuffix(spellName, "ra III") ||
-		strings.HasSuffix(spellName, "ra IV") ||
-		strings.HasSuffix(spellName, "ra V") ||
-		strings.Contains(spellName, "ga") // Curaga, etc.
+	lowerName := strings.ToLower(spellName)
+	return strings.HasSuffix(lowerName, "ra") || // Protectra, Shellra, etc.
+		strings.HasSuffix(lowerName, "ra ii") ||
+		strings.HasSuffix(lowerName, "ra iii") ||
+		strings.HasSuffix(lowerName, "ra iv") ||
+		strings.HasSuffix(lowerName, "ra v") ||
+		strings.Contains(lowerName, "ga") // Curaga, etc.
 }
 
 // isEquivalentSpell checks if two spell names refer to the same effect
@@ -759,14 +777,22 @@ func (ce *CastingEngine) executeCast(activeCast *ActiveCast) (bool, error) {
 	spellName := request.SpellName
 	originalTarget := request.Target
 
+	// Use original target from context if it's a sequence and we might have modified request.Target in a previous step
+	if request.Type == CastTypeSequence && request.Context.OriginalTarget != "" {
+		originalTarget = request.Context.OriginalTarget
+	}
+
 	// Resolve the correct target for this spell
 	resolvedTarget, err := ce.resolveSpellTarget(spellName, originalTarget, request.Context)
 	if err != nil {
 		return false, fmt.Errorf("failed to resolve target for spell %s: %v", spellName, err)
 	}
 
-	// Update the request with the resolved target
-	request.Target = resolvedTarget
+	// Update the request with the resolved target for the current spell execution
+	// But ONLY if it's different, to avoid unnecessary updates if we're debugging
+	if request.Target != resolvedTarget {
+		request.Target = resolvedTarget
+	}
 
 	// Log the casting attempt
 	log.Printf("Executing cast: %s on %s (attempt %d)", spellName, resolvedTarget, activeCast.AttemptCount)
@@ -1043,7 +1069,28 @@ func (ce *CastingEngine) SelectOptimalCure(context *CastContext) (*cureSelector.
 	return ce.selectOptimalCure(context)
 }
 
+func (ce *CastingEngine) SelectOptimalNaSpell(context *CastContext) (string, error) {
+	return ce.selectOptimalNaSpell(context)
+}
+
 // GetStats returns casting engine statistics
+func (ce *CastingEngine) SelectOptimalProtect(context *CastContext) (*buffSelector.BuffOption, error) {
+	return ce.selectOptimalProtect(context)
+}
+
+func (ce *CastingEngine) SelectOptimalShell(context *CastContext) (*buffSelector.BuffOption, error) {
+	return ce.selectOptimalShell(context)
+}
+
+func (ce *CastingEngine) SelectOptimalReraise(jobLevels map[string]int, availableMP int) (*buffSelector.BuffOption, error) {
+	availableMP = availableMP - ce.config.MPReservation
+	if availableMP <= 0 {
+		return nil, fmt.Errorf("insufficient MP for Reraise")
+	}
+
+	return ce.buffSelector.SelectOptimalReraise(jobLevels, availableMP)
+}
+
 func (ce *CastingEngine) GetStats() map[string]interface{} {
 	ce.mu.RLock()
 	defer ce.mu.RUnlock()

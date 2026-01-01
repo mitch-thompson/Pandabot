@@ -2,6 +2,7 @@ package triggerService
 
 import (
 	"log"
+	"time"
 
 	"PandaBot/internal/casting"
 	"PandaBot/internal/entityService"
@@ -35,11 +36,28 @@ func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerE
 
 	// Process each trigger event through centralized casting system
 	for _, triggerEvent := range triggerEvents {
-		// Handle "panda" control trigger (clear queue and buffs)
-		if triggerEvent.TriggerType == "panda" {
-			log.Printf("Executing clear command: clearing casting queue and tracked buffs")
-			ts.castingSystem.GetCastingEngine().ClearQueue()
-			sm.ClearDesiredBuffs()
+		// Handle "panda" and "panda clear" control triggers
+		if triggerEvent.TriggerType == "panda" || triggerEvent.TriggerType == "panda clear" {
+			if triggerEvent.TriggerType == "panda clear" {
+				if triggerEvent.Arg == "" {
+					log.Printf("Executing clear command: clearing all tracked buffs")
+					sm.ClearDesiredBuffs()
+				} else {
+					// Try to clear by player name first
+					if _, exists := sm.GetPartyMember(triggerEvent.Arg); exists {
+						log.Printf("Executing clear command for player: %s", triggerEvent.Arg)
+						sm.ClearDesiredBuff(triggerEvent.Arg)
+					} else {
+						// Otherwise try to clear by spell name
+						log.Printf("Executing clear command for spell: %s", triggerEvent.Arg)
+						sm.ClearDesiredBuffBySpell(triggerEvent.Arg)
+					}
+				}
+			} else {
+				log.Printf("Executing clear command: clearing casting queue and tracked buffs")
+				ts.castingSystem.GetCastingEngine().ClearQueue()
+				sm.ClearDesiredBuffs()
+			}
 			continue
 		}
 
@@ -47,32 +65,40 @@ func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerE
 		if statusID, ok := ts.buffToStatusMap[triggerEvent.TriggerType]; ok {
 			// Some buffs are always self-buffs
 			target := triggerEvent.Sender
+			priority := 50 // Default priority
 			if triggerEvent.TriggerType == "light arts" || triggerEvent.TriggerType == "lightarts" ||
 				triggerEvent.TriggerType == "dark arts" || triggerEvent.TriggerType == "darkarts" ||
 				triggerEvent.TriggerType == "afflatus solace" || triggerEvent.TriggerType == "solace" ||
-				triggerEvent.TriggerType == "afflatus misery" || triggerEvent.TriggerType == "misery" ||
-				triggerEvent.TriggerType == "reraise" {
-				target = "<me>"
+				triggerEvent.TriggerType == "afflatus misery" || triggerEvent.TriggerType == "misery" {
+				priority = 80
+			} else if triggerEvent.TriggerType == "reraise" {
+				priority = 90
 			}
-			sm.RegisterDesiredBuff(target, statusID, triggerEvent.TriggerType)
+			sm.RegisterDesiredBuff(target, statusID, triggerEvent.TriggerType, priority, time.Time{})
 		}
 
 		// Special handling for elemental buff sequences (firebuffs, etc.)
 		elementalMapping := statusMonitor.GetElementalBarStatusMapping()
 		if mapping, ok := elementalMapping[triggerEvent.TriggerType]; ok {
-			// Register Protect and Shell for monitoring
-			sm.RegisterDesiredBuff(triggerEvent.Sender, 40, "protect")
-			sm.RegisterDesiredBuff(triggerEvent.Sender, 41, "shell")
+			// Register Protect and Shell for monitoring for EVERYONE in the party
+			// because they resolve to Protectra/Shellra which are AoE.
+			// Even if they resolve to single target Protect/Shell, we want to maintain them on the sender.
+			// But for AoE spells, it's better to register them for everyone.
+			for _, member := range partyMembers {
+				sm.RegisterDesiredBuff(member.Name, 40, "protect", 60, time.Time{})
+				sm.RegisterDesiredBuff(member.Name, 41, "shell", 60, time.Time{})
+			}
 
 			// Register the specific Bar spell - Bar spells always target the caster
-			sm.RegisterDesiredBuff("<me>", mapping.StatusID, mapping.SpellName)
+			sm.RegisterDesiredBuff(triggerEvent.Sender, mapping.StatusID, mapping.SpellName, 70, time.Time{})
 
 			// If it's a WHM-enabled buff sequence, also register WHM prep buffs
-			// These are always self-buffs, so they should target "<me>"
-			sm.RegisterDesiredBuff("<me>", 358, "light arts")
-			sm.RegisterDesiredBuff("<me>", 417, "afflatus solace")
-			sm.RegisterDesiredBuff("<me>", 113, "reraise")
-			sm.RegisterDesiredBuff("<me>", 272, "auspice")
+			// These are always self-buffs, so they should target the sender (who requested the buffs)
+			// autoActionService will handle redirecting these to <me> for monitoring.
+			sm.RegisterDesiredBuff(triggerEvent.Sender, 358, "Light Arts", 80, time.Time{})
+			sm.RegisterDesiredBuff(triggerEvent.Sender, 417, "Afflatus Solace", 80, time.Time{})
+			sm.RegisterDesiredBuff(triggerEvent.Sender, 113, "reraise", 90, time.Time{})
+			sm.RegisterDesiredBuff(triggerEvent.Sender, 272, "Auspice", 75, time.Time{})
 		}
 
 		requestIDs := ts.castingSystem.ProcessTriggerEvent(

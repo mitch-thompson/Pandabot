@@ -2,6 +2,7 @@ package statusMonitor
 
 import (
 	"testing"
+	"time"
 )
 
 func TestDesiredBuffMonitoring(t *testing.T) {
@@ -12,7 +13,7 @@ func TestDesiredBuffMonitoring(t *testing.T) {
 	sm.UpdatePartyMember(playerName, 100, 100, 1, 123, []int{})
 
 	// 2. Register a desired buff (Haste = 33)
-	sm.RegisterDesiredBuff(playerName, 33, "haste")
+	sm.RegisterDesiredBuff(playerName, 33, "haste", 50, time.Time{})
 
 	// 3. Check for actions - should include a manual_spell for haste
 	actions := sm.CheckForActions()
@@ -72,9 +73,9 @@ func TestElementalBuffMonitoring(t *testing.T) {
 
 	// 2. Simulate "firebuffs" trigger registration (normally done by TriggerService)
 	// firebuffs registers Protect (40), Shell (41), and Barfire (100)
-	sm.RegisterDesiredBuff(playerName, 40, "protect")
-	sm.RegisterDesiredBuff(playerName, 41, "shell")
-	sm.RegisterDesiredBuff(playerName, 100, "firebuffs")
+	sm.RegisterDesiredBuff(playerName, 40, "protect", 60, time.Time{})
+	sm.RegisterDesiredBuff(playerName, 41, "shell", 60, time.Time{})
+	sm.RegisterDesiredBuff(playerName, 100, "firebuffs", 70, time.Time{})
 
 	// 3. Check for actions - should include all three
 	actions := sm.CheckForActions()
@@ -122,9 +123,9 @@ func TestBuffLoopPrevention(t *testing.T) {
 	sm.UpdatePartyMember(playerName, 100, 100, 3, 123, []int{40, 41}) // Has Protect/Shell, missing Barfire
 
 	// 2. Register buffs as TriggerService does for firebuffs
-	sm.RegisterDesiredBuff(playerName, 40, "protect")
-	sm.RegisterDesiredBuff(playerName, 41, "shell")
-	sm.RegisterDesiredBuff(playerName, 100, "barfire") // Now using individual trigger
+	sm.RegisterDesiredBuff(playerName, 40, "protect", 60, time.Time{})
+	sm.RegisterDesiredBuff(playerName, 41, "shell", 60, time.Time{})
+	sm.RegisterDesiredBuff(playerName, 100, "barfire", 70, time.Time{})
 
 	// 3. Check for actions
 	actions := sm.CheckForActions()
@@ -158,7 +159,7 @@ func TestSelfBuffTargeting(t *testing.T) {
 	// 2. Register a self-buff for the Player (e.g., Light Arts - 358)
 	// Even if registered FOR Player1, it should target the caster
 	// NOTE: In the real app, TriggerService now passes "<me>" for these.
-	sm.RegisterDesiredBuff("<me>", 358, "light arts")
+	sm.RegisterDesiredBuff("<me>", 358, "light arts", 80, time.Time{})
 
 	// 3. Check for actions
 	actions := sm.CheckForActions()

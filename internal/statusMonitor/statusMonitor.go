@@ -30,11 +30,18 @@ type PartyMember struct {
 	Job                int
 	Zone               int
 	StatusIDs          []int
-	DesiredBuffs       map[int]string // map of status ID to trigger/spell name
+	DesiredBuffs       map[int]DesiredBuff // map of status ID to buff info
 	LastSeen           time.Time
 	NeedsHealing       bool
 	NeedsStatusRemoval bool
 	Priority           int // Higher number = higher priority
+}
+
+// DesiredBuff represents a buff that should be maintained
+type DesiredBuff struct {
+	SpellName string
+	Priority  int
+	Expiry    time.Time
 }
 
 // HealthThresholds defines when healing is needed
@@ -135,7 +142,7 @@ func (sm *StatusMonitor) UpdatePartyMemberWithMaxValues(name string, hpPercent, 
 		member = &PartyMember{
 			Name:         name,
 			Priority:     sm.calculateMemberPriority(job),
-			DesiredBuffs: make(map[int]string),
+			DesiredBuffs: make(map[int]DesiredBuff),
 		}
 		sm.partyMembers[name] = member
 	}
@@ -297,7 +304,7 @@ func (sm *StatusMonitor) CheckForActions() []ActionTrigger {
 		}
 
 		// Check for desired buffs
-		for statusID, triggerName := range member.DesiredBuffs {
+		for statusID, buff := range member.DesiredBuffs {
 			hasBuff := false
 			for _, currentID := range member.StatusIDs {
 				if currentID == statusID {
@@ -307,13 +314,19 @@ func (sm *StatusMonitor) CheckForActions() []ActionTrigger {
 			}
 
 			if !hasBuff {
+				// Check for expiry
+				if !buff.Expiry.IsZero() && time.Now().After(buff.Expiry) {
+					delete(member.DesiredBuffs, statusID)
+					continue
+				}
+
 				// TODO: check zone logic (for now just recast)
 				actions = append(actions, ActionTrigger{
 					Type:     "manual_spell", // Or "buff" if we want optimal selection
 					Target:   member.Name,
-					Spell:    triggerName,
-					Priority: 5, // Default buff priority
-					Reason:   fmt.Sprintf("Desired buff %s (ID %d) is missing", triggerName, statusID),
+					Spell:    buff.SpellName,
+					Priority: buff.Priority,
+					Reason:   fmt.Sprintf("Desired buff %s (ID %d) is missing", buff.SpellName, statusID),
 				})
 			}
 		}
@@ -378,31 +391,60 @@ func (sm *StatusMonitor) CleanupStaleMembers(maxAge time.Duration) int {
 }
 
 // RegisterDesiredBuff adds a buff that should be monitored for a player
-func (sm *StatusMonitor) RegisterDesiredBuff(playerName string, statusID int, triggerName string) {
+func (sm *StatusMonitor) RegisterDesiredBuff(playerName string, statusID int, spellName string, priority int, expiry time.Time) {
 	targetName := playerName
 	if targetName == "<me>" {
 		targetName = sm.PlayerName
 	}
 
 	if targetName == "" {
-		// If we don't know the player name yet, we can't register it
 		return
 	}
 
 	member, exists := sm.partyMembers[targetName]
 	if !exists {
-		// If member doesn't exist yet, we can't easily register it without more info
-		// but let's create a placeholder if needed, or just return.
-		// For now, let's assume the member is usually there.
 		return
 	}
-	member.DesiredBuffs[statusID] = triggerName
+	member.DesiredBuffs[statusID] = DesiredBuff{
+		SpellName: spellName,
+		Priority:  priority,
+		Expiry:    expiry,
+	}
 }
 
 // ClearDesiredBuffs clears all registered desired buffs for all party members
 func (sm *StatusMonitor) ClearDesiredBuffs() {
 	for _, member := range sm.partyMembers {
-		member.DesiredBuffs = make(map[int]string)
+		member.DesiredBuffs = make(map[int]DesiredBuff)
+	}
+}
+
+// ClearDesiredBuff clears buffs for a specific target
+func (sm *StatusMonitor) ClearDesiredBuff(target string) {
+	if target == "<me>" {
+		target = sm.PlayerName
+	}
+	if member, exists := sm.partyMembers[target]; exists {
+		member.DesiredBuffs = make(map[int]DesiredBuff)
+	}
+}
+
+// ClearDesiredBuffBySpell clears a specific buff type across all members
+func (sm *StatusMonitor) ClearDesiredBuffBySpell(spellName string) {
+	spellName = strings.ToLower(spellName)
+	for _, member := range sm.partyMembers {
+		for id, buff := range member.DesiredBuffs {
+			if strings.ToLower(buff.SpellName) == spellName {
+				delete(member.DesiredBuffs, id)
+			}
+		}
+	}
+}
+
+// ClearDesiredBuffByStatusID clears a specific status ID across all members
+func (sm *StatusMonitor) ClearDesiredBuffByStatusID(statusID int) {
+	for _, member := range sm.partyMembers {
+		delete(member.DesiredBuffs, statusID)
 	}
 }
 

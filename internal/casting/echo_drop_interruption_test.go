@@ -5,7 +5,9 @@ import (
 )
 
 func TestCastingEngine_QueueInterruption(t *testing.T) {
-	engine := NewCastingEngine(DefaultCastingConfig())
+	config := DefaultCastingConfig()
+	config.MaxConcurrentCasts = 5
+	engine := NewCastingEngine(config)
 
 	// 1. Add some low priority casts
 	err := engine.RequestCast(&CastRequest{

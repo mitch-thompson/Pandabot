@@ -347,35 +347,88 @@ func (s *Server) handleStatusUpdate(client *Client, parts []string) {
 		return
 	}
 
-	// Process each party member
-	for i := 2; i < len(parts); i++ {
-		memberData := strings.Split(parts[i], ":")
-		if len(memberData) < 6 {
-			continue
-		}
+	// Process player (parts[2])
+	playerData := strings.Split(parts[2], ":")
+	if len(playerData) >= 8 {
+		processPartyMember(s, client, playerData, true) // true for isPlayer
+	}
 
-		name := memberData[0]
-		hpPercent, _ := strconv.Atoi(memberData[1])
-		mpPercent, _ := strconv.Atoi(memberData[2])
-		job, _ := strconv.Atoi(memberData[3])
-		zone, _ := strconv.Atoi(memberData[4])
-
-		// Parse status effects
-		var statusIDs []int
-		if len(memberData) > 5 && memberData[5] != "" {
-			statusStrs := strings.Split(memberData[5], ",")
-			for _, statusStr := range statusStrs {
-				if statusID, err := strconv.Atoi(statusStr); err == nil {
-					statusIDs = append(statusIDs, statusID)
-				}
+	// Process party members (parts[3], semicolon-separated)
+	if len(parts) > 3 {
+		memberStrs := strings.Split(parts[3], ";")
+		for _, memberStr := range memberStrs {
+			if memberStr == "" {
+				continue
+			}
+			memberData := strings.Split(memberStr, ":")
+			if len(memberData) >= 8 {
+				processPartyMember(s, client, memberData, false)
 			}
 		}
-
-		// Update status monitor
-		s.statusMonitor.UpdatePartyMember(name, hpPercent, mpPercent, job, zone, statusIDs)
 	}
 
 	log.Printf("Status update processed from %s (timestamp: %d)", client.conn.RemoteAddr(), timestamp)
+}
+
+// Helper function to process a party member (player or other)
+func processPartyMember(s *Server, client *Client, memberData []string, isPlayer bool) {
+	name := memberData[0]
+	hpPercent, _ := strconv.Atoi(memberData[1])
+	mpPercent, _ := strconv.Atoi(memberData[2])
+	hpActual, _ := strconv.Atoi(memberData[3])
+	mpActual, _ := strconv.Atoi(memberData[4])
+	job, _ := strconv.Atoi(memberData[5])
+	zone, _ := strconv.Atoi(memberData[6])
+
+	// Compute max values
+	hpMax := 0
+	if hpPercent > 0 {
+		hpMax = hpActual * 100 / hpPercent
+	} else {
+		hpMax = hpActual // Typically 0 when dead
+	}
+
+	mpMax := 0
+	if mpPercent > 0 {
+		mpMax = mpActual * 100 / mpPercent
+	} else {
+		mpMax = mpActual
+	}
+
+	// Parse status effects
+	var statusIDs []int
+	if memberData[7] != "" {
+		statusStrs := strings.Split(memberData[7], ",")
+		for _, statusStr := range statusStrs {
+			if statusID, err := strconv.Atoi(statusStr); err == nil {
+				statusIDs = append(statusIDs, statusID)
+			}
+		}
+	}
+
+	// Update status monitor with max values
+	s.statusMonitor.UpdatePartyMemberWithMaxValues(
+		name,
+		hpPercent,
+		mpPercent,
+		hpActual,
+		mpActual,
+		hpMax,
+		mpMax,
+		job,
+		zone,
+		statusIDs,
+	)
+
+	// If this is the player, update client info
+	if isPlayer && name != "" {
+		client.playerName = name
+		client.currentZone = fmt.Sprintf("%d", zone)
+		s.castingSystem.UpdateClientPlayerName(client.conn, name)
+		// Update MP and job levels (assuming job levels from status or default)
+		jobLevels := map[string]int{getJobNameFromID(job): 75} // Placeholder; update if levels available
+		s.castingSystem.UpdateClientStatus(client.conn, mpActual, jobLevels)
+	}
 }
 
 // handleChatMessage processes a chat message from the client
@@ -509,7 +562,12 @@ func (s *Server) processJSONMessage(client *Client, messageStr string) {
 		s.handleJSONChatMessage(client, &msg)
 
 	case protocol.TypeStatusUpdate:
-		s.handleJSONStatusUpdate(client, &msg)
+		body, ok := msg.Body.(map[string]interface{})
+		if !ok {
+			log.Printf("Invalid body type for status update from %s: expected map[string]interface{}", client.conn.RemoteAddr())
+			return
+		}
+		s.handleJSONStatusUpdate(client, body)
 
 	case protocol.TypeSpellComplete:
 		s.handleJSONSpellComplete(client, &msg)
@@ -521,7 +579,7 @@ func (s *Server) processJSONMessage(client *Client, messageStr string) {
 		s.handleJSONReadyResponse(client, &msg)
 
 	case protocol.TypeReadyForAction:
-		s.castingSystem.HandleReadyForAction(client.conn)
+		s.handleJSONReadyForAction(client, &msg)
 
 	case protocol.TypeErrorReport:
 		s.handleJSONErrorReport(client, &msg)
@@ -560,10 +618,25 @@ func (s *Server) handleJSONSpellComplete(client *Client, msg *protocol.Message) 
 	// Notify centralized casting system
 	s.castingSystem.HandleSpellComplete(client.conn, complete.CommandID)
 
+	// If it was a buff, we should check if we can clear a desired buff
+	// The centralized casting system handles the mapping from request to spell cast
+	// For now, let's look at the client's current command if it matches
 	client.queueMutex.Lock()
 	defer client.queueMutex.Unlock()
 
 	if client.currentCommand != nil && client.currentCommand.ID == complete.CommandID {
+		// If it's a spell command, try to clear the corresponding desired buff
+		cmd := client.currentCommand.Command
+		if strings.HasPrefix(cmd, "/ma \"") {
+			// Extract spell name
+			endIndex := strings.Index(cmd[5:], "\"")
+			if endIndex != -1 {
+				spellName := cmd[5 : 5+endIndex]
+				log.Printf("Spell %s completed, clearing desired buff if present", spellName)
+				s.statusMonitor.ClearDesiredBuffBySpell(spellName)
+			}
+		}
+
 		client.currentCommand.State = CommandCompleted
 		now := time.Now()
 		client.currentCommand.CompletedAt = &now
@@ -630,6 +703,66 @@ func (s *Server) handleJSONSpellFailed(client *Client, msg *protocol.Message) {
 	} else {
 		log.Printf("Received failure for unknown command %s from %s", failed.CommandID, client.conn.RemoteAddr())
 	}
+}
+
+// handleJSONReadyForAction processes a signal that the client is ready for a new action
+func (s *Server) handleJSONReadyForAction(client *Client, msg *protocol.Message) {
+	// First notify the casting system (for potential pending manual requests)
+	s.castingSystem.HandleReadyForAction(client.conn)
+
+	// Now check the decision tree for the next automatic action
+	playerName := client.playerName
+	if playerName == "" {
+		// Try to find player name from status monitor if not set on client
+		for name, pm := range s.statusMonitor.GetAllPartyMembers() {
+			// Check if this member's zone matches the client's current zone
+			// client.currentZone is a string, pm.Zone is an int
+			zoneStr := fmt.Sprintf("%d", pm.Zone)
+			if (client.currentZone == zoneStr || client.currentZone == "Zone_"+zoneStr) && pm.HPMax > 0 {
+				playerName = name
+				client.playerName = name // Cache it
+				break
+			}
+		}
+	}
+
+	if playerName != "" {
+		command, reason, err := s.autoActionService.DecideNextAction(playerName, s.statusMonitor)
+		if err != nil {
+			log.Printf("Decision tree error for %s: %v", playerName, err)
+		} else if command != nil {
+			log.Printf("Decision tree for %s: %s (Reason: %s)", playerName, command.Command, reason)
+
+			// Wrap in JSON ExecuteCommand message
+			executeMsg := protocol.Message{
+				Type: protocol.TypeExecuteCommand,
+				Body: protocol.ExecuteCommand{
+					Command:   command.Command,
+					Target:    command.Target,
+					Priority:  command.Priority,
+					ID:        fmt.Sprintf("auto_%d", time.Now().UnixNano()),
+					Timestamp: time.Now().Unix(),
+				},
+			}
+
+			// Use a custom encoder to avoid HTML escaping of < and >
+			var buf strings.Builder
+			encoder := json.NewEncoder(&buf)
+			encoder.SetEscapeHTML(false)
+			err = encoder.Encode(executeMsg)
+
+			if err != nil {
+				log.Printf("Failed to marshal auto command: %v", err)
+			} else {
+				s.sendMessageToClient(client, strings.TrimSpace(buf.String()))
+				return
+			}
+		}
+	}
+
+	// If decision tree has nothing, fallback to old queue for now
+	// but the goal is to deprecate it.
+	s.processCommandQueue(client)
 }
 
 // handleJSONReadyResponse processes a JSON ready response notification
@@ -769,100 +902,121 @@ func (s *Server) isCommandStillNecessary(client *Client, cmd *QueuedCommand) boo
 	return true
 }
 
-// handleJSONStatusUpdate processes a JSON status update
-func (s *Server) handleJSONStatusUpdate(client *Client, msg *protocol.Message) {
-	bodyBytes, err := json.Marshal(msg.Body)
-	if err != nil {
-		log.Printf("Failed to marshal status body: %v", err)
+// handleJSONStatusUpdate processes a JSON status update from the client
+func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interface{}) {
+	// Parse timestamp
+	timestampFloat, ok := body["Timestamp"].(float64)
+	if !ok {
+		log.Printf("Invalid timestamp in status update from %s", client.conn.RemoteAddr())
+		return
+	}
+	timestamp := int64(timestampFloat)
+
+	// Parse player name and zone
+	playerName, ok := body["PlayerName"].(string)
+	if !ok {
+		log.Printf("Invalid player name in status update from %s", client.conn.RemoteAddr())
+		return
+	}
+	zoneFloat, ok := body["Zone"].(float64)
+	if !ok {
+		log.Printf("Invalid zone in status update from %s", client.conn.RemoteAddr())
+		return
+	}
+	zone := int(zoneFloat)
+
+	// Update client info
+	client.playerName = playerName
+	client.currentZone = fmt.Sprintf("Zone_%d", zone)
+	s.castingSystem.UpdateClientPlayerName(client.conn, playerName)
+
+	// Parse members
+	members, ok := body["Members"].([]interface{})
+	if !ok {
+		log.Printf("Invalid members array in status update from %s", client.conn.RemoteAddr())
 		return
 	}
 
-	status, err := protocol.UnmarshalStatusUpdate(bodyBytes)
-	if err != nil {
-		log.Printf("Failed to unmarshal status update: %v", err)
-		return
-	}
+	log.Printf("[STATUS DEBUG] Party Members (%d):", len(members))
 
-	// Log all status update information for debugging
-	log.Printf("[STATUS DEBUG] Received status update from %s:", client.conn.RemoteAddr())
-	log.Printf("[STATUS DEBUG]   Timestamp: %d", status.Timestamp)
-	log.Printf("[STATUS DEBUG]   Player HP: %d, Player MP: %d", status.PlayerHP, status.PlayerMP)
-	log.Printf("[STATUS DEBUG]   Zone: %s", status.Zone)
-	log.Printf("[STATUS DEBUG]   Job Levels: %v", status.JobLevels)
-
-	// Check for zone change
-	if client.currentZone != status.Zone {
-		if client.currentZone != "" {
-			log.Printf("[ZONE CHANGE] Player %s moved from %s to %s", client.playerName, client.currentZone, status.Zone)
-			log.Printf("[ZONE CHANGE] Clearing casting queue and tracked buffs")
-
-			// Clear client's own queue
-			client.queueMutex.Lock()
-			client.commandQueue = nil
-			client.currentCommand = nil
-			client.queueMutex.Unlock()
-
-			// Clear casting engine queue
-			s.castingSystem.GetCastingEngine().ClearQueue()
-
-			// Clear status monitor buffs
-			s.statusMonitor.ClearDesiredBuffs()
+	for _, m := range members {
+		member, ok := m.(map[string]interface{})
+		if !ok {
+			continue
 		}
-		client.currentZone = status.Zone
-	}
 
-	log.Printf("[STATUS DEBUG]   Party Members (%d):", len(status.PartyMembers))
+		name, ok := member["Name"].(string)
+		if !ok {
+			continue
+		}
 
-	// Process each party member
-	for i, member := range status.PartyMembers {
-		log.Printf("[STATUS DEBUG]     [%d] %s: HP=%d%% (%d/%d), MP=%d%% (%d/%d), Job=%s, Status=%v",
-			i, member.Name, member.HPPercent, member.HPActual, member.HPMax,
-			member.MPPercent, member.MPActual, member.MPMax, member.Job, member.StatusEffects)
+		hpPercentFloat, _ := member["HPPercent"].(float64)
+		mpPercentFloat, _ := member["MPPercent"].(float64)
+		hpActualFloat, _ := member["HPActual"].(float64)
+		mpActualFloat, _ := member["MPActual"].(float64)
+		jobFloat, _ := member["Job"].(float64)
+		memberZoneFloat, _ := member["Zone"].(float64)
 
-		// First party member (index 0) is always the player themselves
-		if i == 0 && member.Name != "" {
-			client.playerName = member.Name
-			log.Printf("Updated player name for client %s: %s", client.conn.RemoteAddr(), client.playerName)
+		hpPercent := int(hpPercentFloat)
+		mpPercent := int(mpPercentFloat)
+		hpActual := int(hpActualFloat)
+		mpActual := int(mpActualFloat)
+		job := int(jobFloat)
+		memberZone := int(memberZoneFloat)
 
-			// Update casting system with player name
-			s.castingSystem.UpdateClientPlayerName(client.conn, client.playerName)
+		// Calculate max values
+		hpMax := 0
+		if hpPercent > 0 {
+			hpMax = hpActual * 100 / hpPercent
+		} else {
+			hpMax = hpActual
+		}
+		mpMax := 0
+		if mpPercent > 0 {
+			mpMax = mpActual * 100 / mpPercent
+		} else {
+			mpMax = mpActual
+		}
 
-			// Update casting system with player info
-			// Use actual MP from status update, not percentage
-			actualMP := status.PlayerMP
-
-			// Use job levels from status update if available, otherwise use defaults
-			jobLevels := status.JobLevels
-			if jobLevels == nil || len(jobLevels) == 0 {
-				log.Printf("[SERVER DEBUG] No job levels provided in status update")
-				jobLevels = make(map[string]int)
+		// Parse status effects
+		var statusIDs []int
+		effects, ok := member["StatusEffects"].([]interface{})
+		if ok {
+			for _, eff := range effects {
+				effFloat, ok := eff.(float64)
+				if ok {
+					statusIDs = append(statusIDs, int(effFloat))
+				}
 			}
-
-			log.Printf("[SERVER DEBUG] Using actualMP=%d (was using MPPercent=%d)", actualMP, member.MPPercent)
-			s.castingSystem.UpdateClientStatus(client.conn, actualMP, jobLevels)
-
-			// Update player status and echo drop count in status monitor
-			s.statusMonitor.UpdatePlayerStatus(client.playerName, status.PlayerStatus, status.EchoDropCount)
 		}
 
+		// Update status monitor
 		s.statusMonitor.UpdatePartyMemberWithMaxValues(
-			member.Name,
-			member.HPPercent,
-			member.MPPercent,
-			member.HPActual,
-			member.MPActual,
-			member.HPMax,
-			member.MPMax,
-			getJobIDFromName(member.Job), // Convert job name to ID
-			0,                            // Zone not used in this context
-			member.StatusEffects,
+			name,
+			hpPercent,
+			mpPercent,
+			hpActual,
+			mpActual,
+			hpMax,
+			mpMax,
+			job,
+			memberZone,
+			statusIDs,
 		)
+
+		log.Printf("[STATUS DEBUG] Member: %s HP: %d/%d (%d%%), MP: %d/%d (%d%%), Job: %d, Zone: %d, Effects: %v",
+			name, hpActual, hpMax, hpPercent, mpActual, mpMax, mpPercent, job, memberZone, statusIDs)
+
+		// If this is the player, update additional info
+		if name == playerName {
+			// Update MP and job levels
+			jobName := getJobNameFromID(job)
+			jobLevels := map[string]int{jobName: 75} // Assume level 75; update if level available
+			s.castingSystem.UpdateClientStatus(client.conn, mpActual, jobLevels)
+		}
 	}
 
-	log.Printf("JSON status update processed from %s (timestamp: %d)", client.conn.RemoteAddr(), status.Timestamp)
-
-	// Trigger Queue Garbage Collection after status update
-	s.validateQueuedActions(client)
+	log.Printf("JSON status update processed from %s (timestamp: %d)", client.conn.RemoteAddr(), timestamp)
 }
 
 // handleJSONErrorReport processes a JSON error report
