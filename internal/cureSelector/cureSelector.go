@@ -329,11 +329,15 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 
 	allSpells := registry.GetAllSpells()
 	for _, s := range allSpells {
-		if s.Type != spell.Healing {
+		if s.Type != spell.Healing && s.Type != spell.BlueMagic {
 			continue
 		}
 
-		if !strings.HasPrefix(s.English, "Cure") {
+		if s.Type == spell.Healing && !strings.HasPrefix(s.English, "Cure") {
+			continue
+		}
+
+		if s.Type == spell.BlueMagic && s.English != "Wild Carrot" && s.English != "Magic Fruit" {
 			continue
 		}
 
@@ -377,11 +381,15 @@ func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[
 
 	allSpells := registry.GetAllSpells()
 	for _, s := range allSpells {
-		if s.Type != spell.Healing {
+		if s.Type != spell.Healing && s.Type != spell.BlueMagic {
 			continue
 		}
 
-		if !strings.HasPrefix(s.English, "Curaga") {
+		if s.Type == spell.Healing && !strings.HasPrefix(s.English, "Curaga") {
+			continue
+		}
+
+		if s.Type == spell.BlueMagic && s.English != "Healing Breeze" {
 			continue
 		}
 

@@ -133,6 +133,11 @@ func initializeSpells() {
 		{English: "Regen III", ID: 110, MPCost: 64, CastTime: 2.0, Type: spell.Enhancing, Element: spell.Light, Targets: action.TargetAlly, Priority: 3, LevelReq: map[string]int{"WHM": 66, "SCH": 80}},
 		{English: "Regen IV", ID: 477, MPCost: 82, CastTime: 2.0, Type: spell.Enhancing, Element: spell.Light, Targets: action.TargetAlly, Priority: 4, LevelReq: map[string]int{"WHM": 86}},
 		{English: "Regen V", ID: 478, MPCost: 100, CastTime: 2.0, Type: spell.Enhancing, Element: spell.Light, Targets: action.TargetAlly, Priority: 5, LevelReq: map[string]int{"WHM": 99}},
+
+		// Blue Magic Healing
+		{English: "Healing Breeze", ID: 581, MPCost: 55, CastTime: 4.5, Type: spell.BlueMagic, Element: spell.Wind, Targets: action.TargetSelf | action.TargetAoE, Priority: 1, HealAmount: 100, LevelReq: map[string]int{"BLU": 16}},
+		{English: "Wild Carrot", ID: 591, MPCost: 37, CastTime: 3.0, Type: spell.BlueMagic, Element: spell.Light, Targets: action.TargetAlly, Priority: 1, HealAmount: 120, LevelReq: map[string]int{"BLU": 30}},
+		{English: "Magic Fruit", ID: 630, MPCost: 72, CastTime: 4.0, Type: spell.BlueMagic, Element: spell.Light, Targets: action.TargetAlly, Priority: 2, HealAmount: 400, LevelReq: map[string]int{"BLU": 58}},
 	}
 
 	for _, s := range defaultSpells {
