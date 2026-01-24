@@ -95,12 +95,12 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		if effect != nil && effect.Severity >= 3 {
 			spellName := effect.SpellID // This is currently mapped to spell name in GetMostSevereStatusEffect
 			// Check if we have a better name via naSelector
-			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaSpell(&casting.CastContext{
+			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaAction(&casting.CastContext{
 				CasterMP:        clientInfo.MP,
 				CasterJobLevels: clientInfo.JobLevels,
 				StatusEffects:   member.StatusIDs,
-			}); err == nil && opt != "" {
-				spellName = opt
+			}); err == nil && opt != nil {
+				spellName = opt.GetName()
 			}
 
 			return &protocol.ExecuteCommand{
@@ -186,7 +186,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 			}
 
 			// Check if this spell is TargetSelf
-			if resolvedTarget, err := aas.castingSystem.GetCastingEngine().ResolveSpellTarget(spellName, member.Name, &casting.CastContext{
+			if resolvedTarget, err := aas.castingSystem.GetCastingEngine().ResolveActionTarget(spellName, member.Name, &casting.CastContext{
 				CasterName: playerName,
 			}); err == nil && (resolvedTarget == playerName || resolvedTarget == "<me>") {
 				// For TargetSelf spells, we monitor the caster
@@ -260,7 +260,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		}
 
 		// Re-resolve target based on the final spell name (handles TargetSelf, etc.)
-		if resolvedTarget, err := aas.castingSystem.GetCastingEngine().ResolveSpellTarget(spellName, target, &casting.CastContext{
+		if resolvedTarget, err := aas.castingSystem.GetCastingEngine().ResolveActionTarget(spellName, target, &casting.CastContext{
 			CasterName: "<me>", // autoActionService always assumes caster is <me> for command generation
 		}); err == nil {
 			target = resolvedTarget
@@ -276,12 +276,12 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		effect := sm.GetMostSevereStatusEffect(member)
 		if effect != nil && effect.Severity == 2 {
 			spellName := effect.SpellID
-			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaSpell(&casting.CastContext{
+			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaAction(&casting.CastContext{
 				CasterMP:        clientInfo.MP,
 				CasterJobLevels: clientInfo.JobLevels,
 				StatusEffects:   member.StatusIDs,
-			}); err == nil && opt != "" {
-				spellName = opt
+			}); err == nil && opt != nil {
+				spellName = opt.GetName()
 			}
 			return &protocol.ExecuteCommand{
 				Command: fmt.Sprintf("/ma \"%s\" %s", spellName, member.Name),

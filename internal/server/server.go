@@ -427,7 +427,7 @@ func processPartyMember(s *Server, client *Client, memberData []string, isPlayer
 		s.castingSystem.UpdateClientPlayerName(client.conn, name)
 		// Update MP and job levels (assuming job levels from status or default)
 		jobLevels := map[string]int{getJobNameFromID(job): 75} // Placeholder; update if levels available
-		s.castingSystem.UpdateClientStatus(client.conn, mpActual, jobLevels)
+		s.castingSystem.UpdateClientStatus(client.conn, mpActual, jobLevels, nil, nil)
 	}
 }
 
@@ -569,11 +569,11 @@ func (s *Server) processJSONMessage(client *Client, messageStr string) {
 		}
 		s.handleJSONStatusUpdate(client, body)
 
-	case protocol.TypeSpellComplete:
-		s.handleJSONSpellComplete(client, &msg)
+	case protocol.TypeActionComplete:
+		s.handleJSONActionComplete(client, &msg)
 
-	case protocol.TypeSpellFailed:
-		s.handleJSONSpellFailed(client, &msg)
+	case protocol.TypeActionFailed:
+		s.handleJSONActionFailed(client, &msg)
 
 	case protocol.TypeReadyResponse:
 		s.handleJSONReadyResponse(client, &msg)
@@ -589,17 +589,17 @@ func (s *Server) processJSONMessage(client *Client, messageStr string) {
 	}
 }
 
-// handleJSONSpellComplete processes a JSON spell completion notification
-func (s *Server) handleJSONSpellComplete(client *Client, msg *protocol.Message) {
+// handleJSONActionComplete processes a JSON action completion notification
+func (s *Server) handleJSONActionComplete(client *Client, msg *protocol.Message) {
 	bodyBytes, err := json.Marshal(msg.Body)
 	if err != nil {
-		log.Printf("Failed to marshal spell complete body: %v", err)
+		log.Printf("Failed to marshal action complete body: %v", err)
 		return
 	}
 
-	var complete protocol.SpellComplete
+	var complete protocol.ActionComplete
 	if err := json.Unmarshal(bodyBytes, &complete); err != nil {
-		log.Printf("Failed to unmarshal spell complete: %v", err)
+		log.Printf("Failed to unmarshal action complete: %v", err)
 		return
 	}
 
@@ -616,11 +616,9 @@ func (s *Server) handleJSONSpellComplete(client *Client, msg *protocol.Message) 
 	}
 
 	// Notify centralized casting system
-	s.castingSystem.HandleSpellComplete(client.conn, complete.CommandID)
+	s.castingSystem.UpdateActionComplete(client.conn, complete.CommandID)
 
 	// If it was a buff, we should check if we can clear a desired buff
-	// The centralized casting system handles the mapping from request to spell cast
-	// For now, let's look at the client's current command if it matches
 	client.queueMutex.Lock()
 	defer client.queueMutex.Unlock()
 
@@ -643,9 +641,6 @@ func (s *Server) handleJSONSpellComplete(client *Client, msg *protocol.Message) 
 
 		log.Printf("Command %s completed successfully: %s", complete.CommandID, client.currentCommand.Command)
 
-		// Debug: Print queue state before processing next command
-		s.logQueueState(client, "before processing next command after completion")
-
 		// Clear current command and process next in queue
 		client.currentCommand = nil
 		go s.processCommandQueue(client)
@@ -654,17 +649,17 @@ func (s *Server) handleJSONSpellComplete(client *Client, msg *protocol.Message) 
 	}
 }
 
-// handleJSONSpellFailed processes a JSON spell failure notification
-func (s *Server) handleJSONSpellFailed(client *Client, msg *protocol.Message) {
+// handleJSONActionFailed processes a JSON action failure notification
+func (s *Server) handleJSONActionFailed(client *Client, msg *protocol.Message) {
 	bodyBytes, err := json.Marshal(msg.Body)
 	if err != nil {
-		log.Printf("Failed to marshal spell failed body: %v", err)
+		log.Printf("Failed to marshal action failed body: %v", err)
 		return
 	}
 
-	var failed protocol.SpellFailed
+	var failed protocol.ActionFailed
 	if err := json.Unmarshal(bodyBytes, &failed); err != nil {
-		log.Printf("Failed to unmarshal spell failed: %v", err)
+		log.Printf("Failed to unmarshal action failed: %v", err)
 		return
 	}
 
@@ -684,7 +679,7 @@ func (s *Server) handleJSONSpellFailed(client *Client, msg *protocol.Message) {
 	}
 
 	// Notify centralized casting system
-	s.castingSystem.HandleSpellFailed(client.conn, failed.CommandID, failed.Error)
+	s.castingSystem.UpdateActionFailed(client.conn, failed.CommandID, failed.Error)
 
 	client.queueMutex.Lock()
 	defer client.queueMutex.Unlock()
@@ -904,14 +899,6 @@ func (s *Server) isCommandStillNecessary(client *Client, cmd *QueuedCommand) boo
 
 // handleJSONStatusUpdate processes a JSON status update from the client
 func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interface{}) {
-	// Parse timestamp
-	timestampFloat, ok := body["Timestamp"].(float64)
-	if !ok {
-		log.Printf("Invalid timestamp in status update from %s", client.conn.RemoteAddr())
-		return
-	}
-	timestamp := int64(timestampFloat)
-
 	// Parse player name and zone
 	playerName, ok := body["PlayerName"].(string)
 	if !ok {
@@ -936,8 +923,6 @@ func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interfac
 		log.Printf("Invalid members array in status update from %s", client.conn.RemoteAddr())
 		return
 	}
-
-	log.Printf("[STATUS DEBUG] Party Members (%d):", len(members))
 
 	for _, m := range members {
 		member, ok := m.(map[string]interface{})
@@ -1004,19 +989,36 @@ func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interfac
 			statusIDs,
 		)
 
-		log.Printf("[STATUS DEBUG] Member: %s HP: %d/%d (%d%%), MP: %d/%d (%d%%), Job: %d, Zone: %d, Effects: %v",
-			name, hpActual, hpMax, hpPercent, mpActual, mpMax, mpPercent, job, memberZone, statusIDs)
-
 		// If this is the player, update additional info
 		if name == playerName {
 			// Update MP and job levels
 			jobName := getJobNameFromID(job)
-			jobLevels := map[string]int{jobName: 75} // Assume level 75; update if level available
-			s.castingSystem.UpdateClientStatus(client.conn, mpActual, jobLevels)
+			// Placeholder level 75; update if levels available in protocol.
+			// Current Lua addon doesn't explicitly send player level in this JSON structure.
+			jobLevels := map[string]int{jobName: 75}
+
+			// Extract known spells and abilities if present
+			var knownSpells []string
+			if spells, ok := body["KnownSpells"].([]interface{}); ok {
+				for _, s := range spells {
+					if name, ok := s.(string); ok {
+						knownSpells = append(knownSpells, name)
+					}
+				}
+			}
+
+			var knownAbilities []string
+			if abilities, ok := body["KnownAbilities"].([]interface{}); ok {
+				for _, a := range abilities {
+					if name, ok := a.(string); ok {
+						knownAbilities = append(knownAbilities, name)
+					}
+				}
+			}
+
+			s.castingSystem.UpdateClientStatus(client.conn, mpActual, jobLevels, knownSpells, knownAbilities)
 		}
 	}
-
-	log.Printf("JSON status update processed from %s (timestamp: %d)", client.conn.RemoteAddr(), timestamp)
 }
 
 // handleJSONErrorReport processes a JSON error report
@@ -1338,20 +1340,20 @@ func (s *Server) validateCastingEngineCasts() {
 			continue
 		}
 
-		spellName := activeCast.Request.SpellName
-		if spellName == "" {
+		if activeCast.Request.Action == nil {
 			continue
 		}
+		actionName := activeCast.Request.Action.GetName()
 
 		// Map of spell names to status IDs for redundancy check
 		// Use centralized buff to status mapping
 		buffChecks := statusMonitor.GetBuffToStatusMap()
 
 		// Normalize spell name (remove level suffixes like V)
-		baseSpellName := spellName
-		if idx := strings.LastIndex(spellName, " "); idx != -1 {
+		baseSpellName := actionName
+		if idx := strings.LastIndex(actionName, " "); idx != -1 {
 			// Check if the last part is a Roman numeral (I, II, III, IV, V)
-			lastPart := spellName[idx+1:]
+			lastPart := actionName[idx+1:]
 			isRoman := true
 			for _, char := range lastPart {
 				if char != 'I' && char != 'V' && char != 'X' {
@@ -1360,14 +1362,14 @@ func (s *Server) validateCastingEngineCasts() {
 				}
 			}
 			if isRoman {
-				baseSpellName = spellName[:idx]
+				baseSpellName = actionName[:idx]
 			}
 		}
 
 		if statusID, ok := buffChecks[strings.ToLower(baseSpellName)]; ok {
 			for _, currentStatusID := range member.StatusIDs {
 				if currentStatusID == statusID {
-					log.Printf("Casting Engine GC: Target %s already has buff %s (status %d), cancelling cast %s", targetName, spellName, statusID, id)
+					log.Printf("Casting Engine GC: Target %s already has buff %s (status %d), cancelling cast %s", targetName, actionName, statusID, id)
 					s.castingSystem.GetCastingEngine().CancelCast(id)
 					break
 				}

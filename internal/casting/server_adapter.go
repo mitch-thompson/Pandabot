@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"PandaBot/internal/action"
 	"PandaBot/internal/entity"
 	"PandaBot/internal/protocol"
 )
@@ -20,12 +21,14 @@ type ServerClientAdapter struct {
 	mu         sync.RWMutex
 
 	// Client state
-	mp          int
-	jobLevels   map[string]int
-	isConnected bool
+	mp             int
+	jobLevels      map[string]int
+	knownSpells    map[string]bool
+	knownAbilities map[string]bool
+	isConnected    bool
 
 	// Command tracking
-	pendingCommands map[string]*SpellCommand
+	pendingCommands map[string]*ActionCommand
 	commandMu       sync.RWMutex
 
 	// Ready check tracking
@@ -46,40 +49,41 @@ func NewServerClientAdapter(conn net.Conn, playerName string) *ServerClientAdapt
 		playerName:         playerName,
 		lastSeen:           time.Now(),
 		jobLevels:          make(map[string]int),
+		knownSpells:        make(map[string]bool),
+		knownAbilities:     make(map[string]bool),
 		isConnected:        true,
-		pendingCommands:    make(map[string]*SpellCommand),
+		pendingCommands:    make(map[string]*ActionCommand),
 		readyChecks:        make(map[string]chan *protocol.ReadyResponse),
 		readyForActionChan: make(chan struct{}, 10), // Buffered to prevent blocking client loop
 	}
 }
 
-// SendSpellCommand implements ClientInterface
-func (sca *ServerClientAdapter) SendSpellCommand(command *SpellCommand) error {
+// SendActionCommand implements ClientInterface
+func (sca *ServerClientAdapter) SendActionCommand(command *ActionCommand) error {
 	sca.commandMu.Lock()
 	sca.pendingCommands[command.ID] = command
 	sca.commandMu.Unlock()
 
-	// Determine if it's a job ability or a spell
-	commandPrefix := "/ma"
-	// Check if it's a known job ability
-	jobAbilities := map[string]bool{
-		"Light Arts":      true,
-		"Dark Arts":       true,
-		"Afflatus Solace": true,
-		"Afflatus Misery": true,
-		"Divine Seal":     true,
-	}
-
-	if jobAbilities[command.Spell] {
+	// Determine the correct command prefix based on action type
+	commandPrefix := "/ma" // Default to magic
+	switch command.ActionType {
+	case action.ActionTypeAbility:
 		commandPrefix = "/ja"
+	case action.ActionTypeItem:
+		commandPrefix = "/item"
+	case action.ActionTypeSpell:
+		commandPrefix = "/ma"
 	}
 
 	// Create execute command message using existing protocol
+	// Ashita v4 expects a standard command string
+	commandStr := fmt.Sprintf("%s \"%s\" %s", commandPrefix, command.ActionName, command.Target)
+
 	commandMsg := &protocol.Message{
 		Type: protocol.TypeExecuteCommand,
 		Body: map[string]interface{}{
 			"id":       command.ID,
-			"command":  fmt.Sprintf("%s \"%s\" %s", commandPrefix, command.Spell, command.Target),
+			"command":  commandStr,
 			"target":   command.Target,
 			"priority": command.Priority,
 			"timeout":  int(command.Timeout.Milliseconds()),
@@ -105,12 +109,24 @@ func (sca *ServerClientAdapter) GetClientInfo() *ClientInfo {
 		jobLevelsCopy[job] = level
 	}
 
+	// Copy known spells/abilities to avoid race conditions
+	knownSpellsCopy := make(map[string]bool)
+	for s, v := range sca.knownSpells {
+		knownSpellsCopy[s] = v
+	}
+	knownAbilitiesCopy := make(map[string]bool)
+	for a, v := range sca.knownAbilities {
+		knownAbilitiesCopy[a] = v
+	}
+
 	return &ClientInfo{
-		PlayerName:  sca.playerName,
-		MP:          sca.mp,
-		JobLevels:   jobLevelsCopy,
-		IsConnected: sca.isConnected,
-		LastSeen:    sca.lastSeen,
+		PlayerName:     sca.playerName,
+		MP:             sca.mp,
+		JobLevels:      jobLevelsCopy,
+		KnownSpells:    knownSpellsCopy,
+		KnownAbilities: knownAbilitiesCopy,
+		IsConnected:    sca.isConnected,
+		LastSeen:       sca.lastSeen,
 	}
 }
 
@@ -147,8 +163,8 @@ func (sca *ServerClientAdapter) UnlockExecution() {
 	sca.executionMu.Unlock()
 }
 
-// UpdateClientState updates the client's state information
-func (sca *ServerClientAdapter) UpdateClientState(mp int, jobLevels map[string]int) {
+// UpdateClientState updates the client's state information including known actions
+func (sca *ServerClientAdapter) UpdateClientState(mp int, jobLevels map[string]int, knownSpells []string, knownAbilities []string) {
 	sca.mu.Lock()
 	defer sca.mu.Unlock()
 
@@ -157,6 +173,19 @@ func (sca *ServerClientAdapter) UpdateClientState(mp int, jobLevels map[string]i
 	for job, level := range jobLevels {
 		sca.jobLevels[job] = level
 	}
+
+	// Update known spells
+	sca.knownSpells = make(map[string]bool)
+	for _, s := range knownSpells {
+		sca.knownSpells[s] = true
+	}
+
+	// Update known abilities
+	sca.knownAbilities = make(map[string]bool)
+	for _, a := range knownAbilities {
+		sca.knownAbilities[a] = true
+	}
+
 	sca.lastSeen = time.Now()
 }
 
@@ -181,8 +210,8 @@ func (sca *ServerClientAdapter) HandleSpellComplete(commandID string) {
 
 	if command, exists := sca.pendingCommands[commandID]; exists {
 		delete(sca.pendingCommands, commandID)
-		log.Printf("Spell completed successfully: %s -> %s on %s",
-			commandID, command.Spell, command.Target)
+		log.Printf("Action completed successfully: %s -> %s on %s",
+			commandID, command.ActionName, command.Target)
 	}
 }
 
@@ -193,8 +222,8 @@ func (sca *ServerClientAdapter) HandleSpellFailed(commandID string, errorMsg str
 
 	if command, exists := sca.pendingCommands[commandID]; exists {
 		delete(sca.pendingCommands, commandID)
-		log.Printf("Spell failed: %s -> %s on %s (error: %s)",
-			commandID, command.Spell, command.Target, errorMsg)
+		log.Printf("Action failed: %s -> %s on %s (error: %s)",
+			commandID, command.ActionName, command.Target, errorMsg)
 	}
 }
 
@@ -214,12 +243,12 @@ func (sca *ServerClientAdapter) HandleReadyResponse(resp *protocol.ReadyResponse
 }
 
 // GetPendingCommands returns currently pending commands
-func (sca *ServerClientAdapter) GetPendingCommands() map[string]*SpellCommand {
+func (sca *ServerClientAdapter) GetPendingCommands() map[string]*ActionCommand {
 	sca.commandMu.RLock()
 	defer sca.commandMu.RUnlock()
 
 	// Return a copy to avoid race conditions
-	result := make(map[string]*SpellCommand)
+	result := make(map[string]*ActionCommand)
 	for id, cmd := range sca.pendingCommands {
 		result[id] = cmd
 	}
@@ -325,12 +354,13 @@ func (csi *CastingServerIntegration) UnregisterClient(conn net.Conn) {
 }
 
 // UpdateClientStatus updates client status information
-func (csi *CastingServerIntegration) UpdateClientStatus(conn net.Conn, mp int, jobLevels map[string]int) {
+// UpdateClientStatus updates the client's status in the casting system
+func (csi *CastingServerIntegration) UpdateClientStatus(conn net.Conn, mp int, jobLevels map[string]int, knownSpells []string, knownAbilities []string) {
 	csi.adaptersMu.RLock()
 	defer csi.adaptersMu.RUnlock()
 
 	if adapter, exists := csi.clientAdapters[conn]; exists {
-		adapter.UpdateClientState(mp, jobLevels)
+		adapter.UpdateClientState(mp, jobLevels, knownSpells, knownAbilities)
 	}
 }
 
@@ -341,29 +371,28 @@ func (csi *CastingServerIntegration) UpdateClientPlayerName(conn net.Conn, playe
 
 	if adapter, exists := csi.clientAdapters[conn]; exists {
 		adapter.SetPlayerName(playerName)
-		log.Printf("Updated player name for client %s: %s", conn.RemoteAddr(), playerName)
 	}
 }
 
-// HandleSpellComplete handles spell completion from existing server
-func (csi *CastingServerIntegration) HandleSpellComplete(conn net.Conn, commandID string) {
+// UpdateActionComplete handles action completion from existing server
+func (csi *CastingServerIntegration) UpdateActionComplete(conn net.Conn, commandID string) {
 	csi.adaptersMu.RLock()
 	defer csi.adaptersMu.RUnlock()
 
 	if adapter, exists := csi.clientAdapters[conn]; exists {
 		adapter.HandleSpellComplete(commandID)
-		csi.clientManager.NotifySpellComplete(commandID, true, "")
+		csi.clientManager.NotifyActionComplete(commandID, true, "")
 	}
 }
 
-// HandleSpellFailed handles spell failure from existing server
-func (csi *CastingServerIntegration) HandleSpellFailed(conn net.Conn, commandID string, errorMsg string) {
+// UpdateActionFailed handles action failure from existing server
+func (csi *CastingServerIntegration) UpdateActionFailed(conn net.Conn, commandID string, errorMsg string) {
 	csi.adaptersMu.RLock()
 	defer csi.adaptersMu.RUnlock()
 
 	if adapter, exists := csi.clientAdapters[conn]; exists {
 		adapter.HandleSpellFailed(commandID, errorMsg)
-		csi.clientManager.NotifySpellComplete(commandID, false, errorMsg)
+		csi.clientManager.NotifyActionComplete(commandID, false, errorMsg)
 	}
 }
 

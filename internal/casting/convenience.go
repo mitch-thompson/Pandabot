@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"time"
 
+	"PandaBot/internal/action"
 	"PandaBot/internal/cureSelector"
 	"PandaBot/internal/entity"
+	"PandaBot/internal/registry"
 )
 
 // CastingHelper provides convenient methods for common casting operations
@@ -137,6 +139,11 @@ func (ch *CastingHelper) CastNaSpell(target string, statusEffects []int, casterM
 
 // CastSpell casts a specific spell (manual casting)
 func (ch *CastingHelper) CastSpell(spellName string, target string, priority int, timeout time.Duration) (string, error) {
+	s, err := registry.GetSpell(spellName)
+	if err != nil {
+		return "", err
+	}
+
 	requestID := fmt.Sprintf("manual_%s_%d", spellName, time.Now().UnixNano())
 
 	// Get complete client context for proper target resolution
@@ -144,12 +151,12 @@ func (ch *CastingHelper) CastSpell(spellName string, target string, priority int
 	casterMP, jobLevels := ch.getCasterContext()
 
 	request := &CastRequest{
-		ID:        requestID,
-		Type:      CastTypeManual,
-		SpellName: spellName,
-		Target:    target,
-		Priority:  priority,
-		Timeout:   timeout,
+		ID:       requestID,
+		Type:     CastTypeManual,
+		Action:   s,
+		Target:   target,
+		Priority: priority,
+		Timeout:  timeout,
 		Context: &CastContext{
 			CasterName:      casterName,
 			CasterMP:        casterMP,
@@ -168,6 +175,15 @@ func (ch *CastingHelper) CastSpell(spellName string, target string, priority int
 func (ch *CastingHelper) CastSpellSequence(spells []string, target string, priority int) (string, error) {
 	requestID := fmt.Sprintf("sequence_%d", time.Now().UnixNano())
 
+	actions := make([]action.Actionable, 0, len(spells))
+	for _, spellName := range spells {
+		s, err := registry.GetSpell(spellName)
+		if err != nil {
+			return "", err
+		}
+		actions = append(actions, s)
+	}
+
 	request := &CastRequest{
 		ID:       requestID,
 		Type:     CastTypeSequence,
@@ -175,12 +191,16 @@ func (ch *CastingHelper) CastSpellSequence(spells []string, target string, prior
 		Priority: priority,
 	}
 
-	// Set up spell sequence in request context
-	// Note: The actual ActiveCast will be created by the engine
-
-	if len(spells) > 0 {
-		request.SpellName = spells[0]
+	if len(actions) > 0 {
+		request.Action = actions[0]
 	}
+
+	// The engine will use the sequence from the ActiveCast it creates
+	// But we need to pass the sequence somehow.
+	// For now, let's assume the caller will populate ActionsInSequence if they have access to ActiveCast,
+	// OR we need to update CastRequest to include initial sequence.
+	// Actually, the current Engine design expects resolveActionSelection to handle it if it's not a manual sequence.
+	// For manual sequence, we might need to add it to CastRequest.
 
 	if err := ch.engine.RequestCast(request); err != nil {
 		return "", err
@@ -191,15 +211,20 @@ func (ch *CastingHelper) CastSpellSequence(spells []string, target string, prior
 
 // CastWithCallback casts a spell with a completion callback
 func (ch *CastingHelper) CastWithCallback(spellName string, target string, priority int, callback CastCallback) (string, error) {
+	s, err := registry.GetSpell(spellName)
+	if err != nil {
+		return "", err
+	}
+
 	requestID := fmt.Sprintf("callback_%s_%d", spellName, time.Now().UnixNano())
 
 	request := &CastRequest{
-		ID:        requestID,
-		Type:      CastTypeManual,
-		SpellName: spellName,
-		Target:    target,
-		Priority:  priority,
-		Callback:  callback,
+		ID:       requestID,
+		Type:     CastTypeManual,
+		Action:   s,
+		Target:   target,
+		Priority: priority,
+		Callback: callback,
 	}
 
 	if err := ch.engine.RequestCast(request); err != nil {
@@ -309,19 +334,24 @@ func (ch *CastingHelper) CastPartyCures(partyMembers []*entity.Entity, casterMP 
 
 // WaitForCast waits for a cast to complete with timeout
 func (ch *CastingHelper) UseEchoDrop(priority int) (string, error) {
+	i, err := registry.GetItem("Echo Drops")
+	if err != nil {
+		return "", err
+	}
+
 	requestID := fmt.Sprintf("echo_%d", time.Now().UnixNano())
 	request := &CastRequest{
-		ID:        requestID,
-		Type:      CastTypeItem,
-		SpellName: "Echo Drop",
-		Target:    "<me>",
-		Priority:  priority,
+		ID:       requestID,
+		Type:     CastTypeItem,
+		Action:   i,
+		Target:   "<me>",
+		Priority: priority,
 		Context: &CastContext{
 			CasterName: ch.getCasterName(),
 		},
 	}
 
-	err := ch.engine.RequestCast(request)
+	err = ch.engine.RequestCast(request)
 	if err != nil {
 		return "", err
 	}
@@ -336,20 +366,28 @@ func (ch *CastingHelper) WaitForCast(requestID string, timeout time.Duration) (*
 		activeCasts := ch.engine.GetActiveCasts()
 		if cast, exists := activeCasts[requestID]; exists {
 			if cast.State == CastStateCompleted {
+				actionName := "unknown"
+				if cast.Request.Action != nil {
+					actionName = cast.Request.Action.GetName()
+				}
 				return &CastResult{
-					Request:   cast.Request,
-					Success:   true,
-					Duration:  time.Since(cast.StartTime),
-					SpellCast: cast.Request.SpellName,
+					Request:    cast.Request,
+					Success:    true,
+					Duration:   time.Since(cast.StartTime),
+					ActionUsed: actionName,
 				}, nil
 			}
 			if cast.State == CastStateFailed {
+				actionName := "unknown"
+				if cast.Request.Action != nil {
+					actionName = cast.Request.Action.GetName()
+				}
 				return &CastResult{
-					Request:   cast.Request,
-					Success:   false,
-					Error:     cast.LastError,
-					Duration:  time.Since(cast.StartTime),
-					SpellCast: cast.Request.SpellName,
+					Request:    cast.Request,
+					Success:    false,
+					Error:      cast.LastError,
+					Duration:   time.Since(cast.StartTime),
+					ActionUsed: actionName,
 				}, nil
 			}
 		} else {
@@ -357,12 +395,16 @@ func (ch *CastingHelper) WaitForCast(requestID string, timeout time.Duration) (*
 			history := ch.engine.GetCastHistory(50)
 			for _, record := range history {
 				if record.Request.ID == requestID {
+					actionName := "unknown"
+					if record.Request.Action != nil {
+						actionName = record.Request.Action.GetName()
+					}
 					return &CastResult{
-						Request:   record.Request,
-						Success:   record.State == CastStateCompleted,
-						Error:     record.Error,
-						Duration:  record.Duration,
-						SpellCast: record.Request.SpellName,
+						Request:    record.Request,
+						Success:    record.State == CastStateCompleted,
+						Error:      record.Error,
+						Duration:   record.Duration,
+						ActionUsed: actionName,
 					}, nil
 				}
 			}

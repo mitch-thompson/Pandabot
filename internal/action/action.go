@@ -1,26 +1,29 @@
 package action
 
-import (
-	"PandaBot/internal/ability"
-	"PandaBot/internal/entity"
-	"PandaBot/internal/spell"
-	"time"
-)
-
 type ActionType uint8
 
 const (
-	CastSpell ActionType = iota
-	UseAbility
-	UseItem
-	Wait
-	Follow
+	ActionTypeSpell ActionType = iota
+	ActionTypeAbility
+	ActionTypeItem
 )
 
-type Action struct {
-	Type    ActionType
-	Spell   *spell.Spell
-	Ability *ability.JobAbility
-	Target  *entity.Entity
-	Delay   time.Duration
+type TargetFlags uint8
+
+const (
+	TargetSelf TargetFlags = 1 << iota
+	TargetPartyMember
+	TargetPlayer
+	TargetEnemy
+	TargetAlly = TargetSelf | TargetPartyMember | TargetPlayer
+	TargetAoE
+	TargetCone
+)
+
+type Actionable interface {
+	GetName() string
+	GetID() uint16
+	GetActionType() ActionType
+	GetPriority() int
+	GetTargetFlags() TargetFlags
 }

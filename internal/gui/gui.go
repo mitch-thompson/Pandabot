@@ -1,7 +1,6 @@
 package gui
 
 import (
-	"fmt"
 	"sort"
 	"time"
 
@@ -124,15 +123,15 @@ func (g *GUI) updatePartyInfo() {
 		widgets.jobLabel.SetText(job.GetJobName(member.Job))
 		widgets.hpBar.SetValue(float64(member.HPPercent))
 
-		statusText := ""
-		if len(member.StatusIDs) > 0 {
-			statusText = fmt.Sprintf("Status: %d", len(member.StatusIDs))
-			// If we wanted to be more descriptive, we could look up the most severe status
-			if severe := sm.GetMostSevereStatusEffect(member); severe != nil {
-				statusText = severe.Name
-			}
-		}
-		widgets.statusLabel.SetText(statusText)
+		//statusText := "" todo
+		//if len(member.StatusIDs) > 0 {
+		//	statusText = fmt.Sprintf("Status: %d", len(member.StatusIDs))
+		//	// If we wanted to be more descriptive, we could look up the most severe status
+		//	if severe := sm.GetMostSevereStatusEffect(member); severe != nil {
+		//		statusText = severe.Name
+		//	}
+		//}
+		//widgets.statusLabel.SetText(statusText)
 	}
 
 	// Remove members who are no longer in the party

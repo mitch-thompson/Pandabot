@@ -2,10 +2,11 @@ package buffSelector
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 
+	"PandaBot/internal/action"
+	"PandaBot/internal/registry"
 	"PandaBot/internal/spell"
 )
 
@@ -25,6 +26,7 @@ type BuffSelector struct {
 	protectSpells []*spell.Spell
 	shellSpells   []*spell.Spell
 	barSpells     []*spell.Spell
+	regenSpells   []*spell.Spell
 	mu            sync.RWMutex
 }
 
@@ -35,6 +37,7 @@ func NewBuffSelector() *BuffSelector {
 		protectSpells: make([]*spell.Spell, 0),
 		shellSpells:   make([]*spell.Spell, 0),
 		barSpells:     make([]*spell.Spell, 0),
+		regenSpells:   make([]*spell.Spell, 0),
 	}
 
 	// Initialize with default buff spells
@@ -45,419 +48,18 @@ func NewBuffSelector() *BuffSelector {
 
 // initializeDefaultBuffSpells sets up the default buff spell database
 func (bs *BuffSelector) initializeDefaultBuffSpells() {
-	// Protect spells (single target - can target party members)
-	protectSpells := []*spell.Spell{
-		{
-			English:  "Protect",
-			ID:       43,
-			MPCost:   8,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetPartyMember,
-			Priority: 1,
-			LevelReq: map[string]int{"WHM": 7, "RDM": 7, "PLD": 10, "SCH": 10, "RUN": 20},
-		},
-		{
-			English:  "Protect II",
-			ID:       44,
-			MPCost:   18,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetPartyMember,
-			Priority: 2,
-			LevelReq: map[string]int{"WHM": 27, "RDM": 27, "PLD": 30, "SCH": 30, "RUN": 40},
-		},
-		{
-			English:  "Protect III",
-			ID:       45,
-			MPCost:   28,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetPartyMember,
-			Priority: 3,
-			LevelReq: map[string]int{"WHM": 47, "RDM": 47, "PLD": 50, "SCH": 50, "RUN": 60},
-		},
-		{
-			English:  "Protect IV",
-			ID:       46,
-			MPCost:   38,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetPartyMember,
-			Priority: 4,
-			LevelReq: map[string]int{"WHM": 63, "RDM": 63, "PLD": 70, "SCH": 66, "RUN": 80},
-		},
-		{
-			English:  "Protect V",
-			ID:       47,
-			MPCost:   48,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetPartyMember,
-			Priority: 5,
-			LevelReq: map[string]int{"WHM": 76, "RDM": 77, "PLD": 90, "SCH": 80},
-		},
-	}
-
-	// Protectra spells (area target - can only target self)
-	protectraSpells := []*spell.Spell{
-		{
-			English:  "Protectra",
-			ID:       125,
-			MPCost:   9,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 1,
-			LevelReq: map[string]int{"WHM": 7},
-		},
-		{
-			English:  "Protectra II",
-			ID:       126,
-			MPCost:   20,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 2,
-			LevelReq: map[string]int{"WHM": 27},
-		},
-		{
-			English:  "Protectra III",
-			ID:       127,
-			MPCost:   32,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 3,
-			LevelReq: map[string]int{"WHM": 47},
-		},
-		{
-			English:  "Protectra IV",
-			ID:       128,
-			MPCost:   44,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 4,
-			LevelReq: map[string]int{"WHM": 63},
-		},
-		{
-			English:  "Protectra V",
-			ID:       129,
-			MPCost:   56,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 5,
-			LevelReq: map[string]int{"WHM": 75},
-		},
-	}
-
-	// Shell spells (single target - can target party members)
-	shellSpells := []*spell.Spell{
-		{
-			English:  "Shell",
-			ID:       48,
-			MPCost:   8,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetPartyMember,
-			Priority: 1,
-			LevelReq: map[string]int{"WHM": 17, "RDM": 17, "PLD": 20, "SCH": 20, "RUN": 10},
-		},
-		{
-			English:  "Shell II",
-			ID:       49,
-			MPCost:   18,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetPartyMember,
-			Priority: 2,
-			LevelReq: map[string]int{"WHM": 37, "RDM": 37, "PLD": 40, "SCH": 40, "RUN": 30},
-		},
-		{
-			English:  "Shell III",
-			ID:       50,
-			MPCost:   28,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetPartyMember,
-			Priority: 3,
-			LevelReq: map[string]int{"WHM": 57, "RDM": 57, "PLD": 60, "SCH": 60, "RUN": 50},
-		},
-		{
-			English:  "Shell IV",
-			ID:       51,
-			MPCost:   38,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetPartyMember,
-			Priority: 4,
-			LevelReq: map[string]int{"WHM": 68, "RDM": 68, "PLD": 80, "SCH": 71, "RUN": 70},
-		},
-		{
-			English:  "Shell V",
-			ID:       52,
-			MPCost:   48,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetPartyMember,
-			Priority: 5,
-			LevelReq: map[string]int{"WHM": 76, "RDM": 87, "SCH": 90, "RUN": 90},
-		},
-	}
-
-	// Shellra spells (area target - can only target self)
-	shellraSpells := []*spell.Spell{
-		{
-			English:  "Shellra",
-			ID:       130,
-			MPCost:   9,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 1,
-			LevelReq: map[string]int{"WHM": 17},
-		},
-		{
-			English:  "Shellra II",
-			ID:       131,
-			MPCost:   20,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 2,
-			LevelReq: map[string]int{"WHM": 37},
-		},
-		{
-			English:  "Shellra III",
-			ID:       132,
-			MPCost:   32,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 3,
-			LevelReq: map[string]int{"WHM": 57},
-		},
-		{
-			English:  "Shellra IV",
-			ID:       133,
-			MPCost:   44,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 4,
-			LevelReq: map[string]int{"WHM": 68},
-		},
-		{
-			English:  "Shellra V",
-			ID:       134,
-			MPCost:   56,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 5,
-			LevelReq: map[string]int{"WHM": 75},
-		},
-	}
-
-	// Bar spells (elemental resistance - self target only)
-	barSpells := []*spell.Spell{
-		{
-			English:  "Barfira",
-			ID:       53,
-			MPCost:   8,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Ice,
-			Targets:  spell.TargetSelf, // Bar spells can only target self
-			Priority: 1,
-			LevelReq: map[string]int{"WHM": 17},
-		},
-		{
-			English:  "Barblizzara",
-			ID:       54,
-			MPCost:   8,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Fire,
-			Targets:  spell.TargetSelf, // Bar spells can only target self
-			Priority: 1,
-			LevelReq: map[string]int{"WHM": 21},
-		},
-		{
-			English:  "Baraera",
-			ID:       55,
-			MPCost:   8,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Earth,
-			Targets:  spell.TargetSelf, // Bar spells can only target self
-			Priority: 1,
-			LevelReq: map[string]int{"WHM": 13},
-		},
-		{
-			English:  "Barstonra",
-			ID:       56,
-			MPCost:   8,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Wind,
-			Targets:  spell.TargetSelf, // Bar spells can only target self
-			Priority: 1,
-			LevelReq: map[string]int{"WHM": 5},
-		},
-		{
-			English:  "Barthundra",
-			ID:       57,
-			MPCost:   8,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Water,
-			Targets:  spell.TargetSelf, // Bar spells can only target self
-			Priority: 1,
-			LevelReq: map[string]int{"WHM": 25},
-		},
-		{
-			English:  "Barwatera",
-			ID:       58,
-			MPCost:   8,
-			CastTime: 3.0,
-			Recast:   0,
-			Type:     spell.Enhancing,
-			Element:  spell.Thunder,
-			Targets:  spell.TargetSelf, // Bar spells can only target self
-			Priority: 1,
-			LevelReq: map[string]int{"WHM": 9},
-		},
-	}
-
-	// Haste
-	hasteSpells := []*spell.Spell{
-		{
-			English:  "Haste",
-			ID:       57,
-			MPCost:   40,
-			CastTime: 2.0,
-			Recast:   20.0,
-			Type:     spell.Enhancing,
-			Element:  spell.Wind,
-			Targets:  spell.TargetPartyMember,
-			Priority: 1,
-			LevelReq: map[string]int{"WHM": 40, "RDM": 48, "BRD": 40, "SCH": 40, "GEO": 40, "RUN": 50},
-		},
-	}
-
-	// WHM Preparation spells
-	whmPrepSpells := []*spell.Spell{
-		{
-			English:  "Auspice",
-			ID:       272,
-			MPCost:   48,
-			CastTime: 2.0,
-			Recast:   10.0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 1,
-			LevelReq: map[string]int{"WHM": 55},
-		},
-		{
-			English:  "Reraise",
-			ID:       113,
-			MPCost:   150,
-			CastTime: 8.0,
-			Recast:   60.0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 1,
-			LevelReq: map[string]int{"WHM": 25, "SCH": 35},
-		},
-		{
-			English:  "Reraise II",
-			ID:       129,
-			MPCost:   150,
-			CastTime: 8.0,
-			Recast:   60.0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 2,
-			LevelReq: map[string]int{"WHM": 56, "SCH": 70},
-		},
-		{
-			English:  "Reraise III",
-			ID:       141,
-			MPCost:   150,
-			CastTime: 8.0,
-			Recast:   60.0,
-			Type:     spell.Enhancing,
-			Element:  spell.Light,
-			Targets:  spell.TargetSelf,
-			Priority: 3,
-			LevelReq: map[string]int{"WHM": 70, "SCH": 91},
-		},
-	}
-
-	// Add all spells to database and categorize them
-	allSpells := append(protectSpells, protectraSpells...)
-	allSpells = append(allSpells, shellSpells...)
-	allSpells = append(allSpells, shellraSpells...)
-	allSpells = append(allSpells, barSpells...)
-	allSpells = append(allSpells, hasteSpells...)
-	allSpells = append(allSpells, whmPrepSpells...)
-
 	bs.protectSpells = make([]*spell.Spell, 0)
 	bs.shellSpells = make([]*spell.Spell, 0)
 	bs.barSpells = make([]*spell.Spell, 0)
+	bs.regenSpells = make([]*spell.Spell, 0)
+
+	allSpells := registry.GetAllSpells()
 
 	for _, buffSpell := range allSpells {
+		if buffSpell.Type != spell.Enhancing {
+			continue
+		}
+
 		bs.spellDatabase[buffSpell.English] = buffSpell
 
 		// Categorize spells based on name patterns
@@ -468,6 +70,8 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			bs.shellSpells = append(bs.shellSpells, buffSpell)
 		} else if strings.HasPrefix(name, "Bar") {
 			bs.barSpells = append(bs.barSpells, buffSpell)
+		} else if strings.HasPrefix(name, "Regen") {
+			bs.regenSpells = append(bs.regenSpells, buffSpell)
 		}
 	}
 }
@@ -485,10 +89,6 @@ func (bs *BuffSelector) selectOptimalProtectInternal(jobLevels map[string]int, a
 	// Prefer area spells for party of 3 or more, OR if player is WHM (WHMs should always use area spells when available)
 	// But if this is a fallback attempt, force single target preference
 	preferArea := !fallbackAttempt && (partySize >= 3 || jobLevels["WHM"] > 0)
-
-	log.Printf("[BUFF DEBUG] selectOptimalProtectInternal: jobLevels=%v, availableMP=%d, partySize=%d, preferArea=%t",
-		jobLevels, availableMP, partySize, preferArea)
-
 	var bestOption *BuffOption
 	bestLevel := 0
 
@@ -514,7 +114,7 @@ func (bs *BuffSelector) selectOptimalProtectInternal(jobLevels map[string]int, a
 		}
 
 		// Determine if this is an area spell (can only target self)
-		isArea := spellObj.Targets&spell.TargetSelf != 0
+		isArea := spellObj.Targets&action.TargetSelf != 0
 
 		// Skip if we prefer area but this isn't area, or vice versa
 		if preferArea && !isArea {
@@ -526,7 +126,6 @@ func (bs *BuffSelector) selectOptimalProtectInternal(jobLevels map[string]int, a
 
 		// Select highest level spell available
 		if spellObj.Priority > bestLevel {
-			log.Printf("[BUFF DEBUG] Selected better Protect: %s (Priority %d, MP: %d)", spellObj.English, spellObj.Priority, spellObj.MPCost)
 			bestLevel = spellObj.Priority
 			bestOption = &BuffOption{
 				SpellName:   spellObj.English,
@@ -590,7 +189,7 @@ func (bs *BuffSelector) selectOptimalShellInternal(jobLevels map[string]int, ava
 		}
 
 		// Determine if this is an area spell (can only target self)
-		isArea := spellObj.Targets&spell.TargetSelf != 0
+		isArea := spellObj.Targets&action.TargetSelf != 0
 
 		// Skip if we prefer area but this isn't area, or vice versa
 		if preferArea && !isArea {
@@ -686,29 +285,20 @@ func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[st
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
 
-	log.Printf("[BUFF DEBUG] GetOptimalBuffSequence: buffType=%s, jobLevels=%v, availableMP=%d, partySize=%d",
-		buffType, jobLevels, availableMP, partySize)
-
 	var sequence []*BuffOption
 
 	// Get Protect spell
 	protectOption, err := bs.SelectOptimalProtect(jobLevels, availableMP, partySize)
 	if err == nil && protectOption != nil {
-		log.Printf("[BUFF DEBUG] Selected Protect: %s (MP: %d)", protectOption.SpellName, protectOption.MPCost)
 		sequence = append(sequence, protectOption)
 		availableMP -= protectOption.MPCost
-	} else {
-		log.Printf("[BUFF DEBUG] Failed to select Protect: %v", err)
 	}
 
 	// Get Shell spell
 	shellOption, err := bs.SelectOptimalShell(jobLevels, availableMP, partySize)
 	if err == nil && shellOption != nil {
-		log.Printf("[BUFF DEBUG] Selected Shell: %s (MP: %d)", shellOption.SpellName, shellOption.MPCost)
 		sequence = append(sequence, shellOption)
 		availableMP -= shellOption.MPCost
-	} else {
-		log.Printf("[BUFF DEBUG] Failed to select Shell: %v", err)
 	}
 
 	// Get elemental Bar spell based on buff type
@@ -724,20 +314,14 @@ func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[st
 	if element, exists := elementMap[buffType]; exists {
 		barOption, err := bs.SelectBarSpell(element, jobLevels, availableMP)
 		if err == nil && barOption != nil {
-			log.Printf("[BUFF DEBUG] Selected Bar spell: %s (MP: %d)", barOption.SpellName, barOption.MPCost)
 			sequence = append(sequence, barOption)
 			availableMP -= barOption.MPCost
-		} else {
-			log.Printf("[BUFF DEBUG] Failed to select Bar spell for %s: %v", element, err)
 		}
-	} else {
-		log.Printf("[BUFF DEBUG] Unknown buff type: %s", buffType)
 	}
 
 	// Add Reraise if available and not already in sequence
 	reraiseOption, err := bs.SelectOptimalReraise(jobLevels, availableMP)
 	if err == nil && reraiseOption != nil {
-		log.Printf("[BUFF DEBUG] Selected Reraise: %s (MP: %d)", reraiseOption.SpellName, reraiseOption.MPCost)
 		sequence = append(sequence, reraiseOption)
 		availableMP -= reraiseOption.MPCost
 	}
@@ -746,7 +330,6 @@ func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[st
 	if level, exists := jobLevels["WHM"]; exists && level >= 50 {
 		auspiceSpell := bs.spellDatabase["Auspice"]
 		if auspiceSpell != nil && int(auspiceSpell.MPCost) <= availableMP {
-			log.Printf("[BUFF DEBUG] Selected Auspice (MP: %d)", auspiceSpell.MPCost)
 			sequence = append(sequence, &BuffOption{
 				SpellName:  auspiceSpell.English,
 				Spell:      auspiceSpell,
@@ -756,11 +339,6 @@ func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[st
 			})
 			availableMP -= int(auspiceSpell.MPCost)
 		}
-	}
-
-	log.Printf("[BUFF DEBUG] Final sequence length: %d", len(sequence))
-	for i, buff := range sequence {
-		log.Printf("[BUFF DEBUG] Sequence[%d]: %s", i, buff.SpellName)
 	}
 
 	if len(sequence) == 0 {
@@ -814,6 +392,51 @@ func (bs *BuffSelector) SelectOptimalReraise(jobLevels map[string]int, available
 
 	if bestOption == nil {
 		return nil, fmt.Errorf("no Reraise spell available")
+	}
+
+	return bestOption, nil
+}
+
+// SelectOptimalRegen selects the highest Regen spell available
+func (bs *BuffSelector) SelectOptimalRegen(jobLevels map[string]int, availableMP int) (*BuffOption, error) {
+	bs.mu.RLock()
+	defer bs.mu.RUnlock()
+
+	var bestOption *BuffOption
+	bestPriority := -1
+
+	for _, spellObj := range bs.regenSpells {
+		// Check MP requirement
+		if int(spellObj.MPCost) > availableMP {
+			continue
+		}
+
+		// Check job level requirement
+		canCast := false
+		for job, level := range jobLevels {
+			if requiredLevel, exists := spellObj.LevelReq[job]; exists {
+				if level >= requiredLevel {
+					canCast = true
+					break
+				}
+			}
+		}
+
+		if canCast && spellObj.Priority > bestPriority {
+			bestPriority = spellObj.Priority
+			bestOption = &BuffOption{
+				SpellName:   spellObj.English,
+				Spell:       spellObj,
+				MPCost:      int(spellObj.MPCost),
+				CastTime:    spellObj.CastTime,
+				Efficiency:  1.0 / float64(spellObj.MPCost),
+				IsAreaSpell: false,
+			}
+		}
+	}
+
+	if bestOption == nil {
+		return nil, fmt.Errorf("no Regen spell available")
 	}
 
 	return bestOption, nil

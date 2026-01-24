@@ -7,11 +7,12 @@ import (
 	"sync"
 	"time"
 
+	"PandaBot/internal/action"
 	"PandaBot/internal/buffSelector"
 	"PandaBot/internal/cureSelector"
 	"PandaBot/internal/entity"
 	"PandaBot/internal/naSelector"
-	"PandaBot/internal/spell"
+	"PandaBot/internal/registry"
 )
 
 // CastingEngine centralizes all spell casting logic and coordination
@@ -43,32 +44,33 @@ type CastingConfig struct {
 	SequenceDelay      time.Duration // Delay between spells in a sequence
 }
 
-// CastRequest represents a request to cast a spell
+// CastRequest represents a request to execute an action
 type CastRequest struct {
-	ID        string
-	Type      CastType
-	SpellName string
-	Target    string
-	Priority  int
-	Timeout   time.Duration
-	Context   *CastContext
-	Callback  CastCallback
+	ID       string
+	Type     CastType
+	Action   action.Actionable
+	Target   string
+	Priority int
+	Timeout  time.Duration
+	Context  *CastContext
+	Callback CastCallback
 }
 
 // CastType defines the type of casting operation
 type CastType int
 
 const (
-	CastTypeManual   CastType = iota // Manually specified spell
-	CastTypeCure                     // Auto-selected cure spell
-	CastTypeBuff                     // Auto-selected buff spell
-	CastTypeNa                       // Auto-selected "na" spell
-	CastTypeSequence                 // Multiple spells in sequence
+	CastTypeManual   CastType = iota // Manually specified action
+	CastTypeCure                     // Auto-selected cure action
+	CastTypeBuff                     // Auto-selected buff action
+	CastTypeNa                       // Auto-selected "na" action
+	CastTypeSequence                 // Multiple actions in sequence
 	CastTypeItem                     // Use an item
-	CastTypeProtect                  // Auto-selected Protect spell
-	CastTypeShell                    // Auto-selected Shell spell
+	CastTypeProtect                  // Auto-selected Protect action
+	CastTypeShell                    // Auto-selected Shell action
 	CastTypeWhmPrep                  // WHM preparation sequence
-	CastTypeReraise                  // Auto-selected Reraise spell
+	CastTypeReraise                  // Auto-selected Reraise action
+	CastTypeRegen                    // Auto-selected Regen action
 )
 
 // CastContext provides context for spell selection and casting
@@ -82,18 +84,18 @@ type CastContext struct {
 	StatusEffects   []int
 	BuffType        string // For buff casting
 	MissingHP       int    // For cure casting
-	OriginalTarget  string // Added to preserve original target across sequence steps
+	OriginalTarget  string // Original target for sequences
 }
 
 // ActiveCast tracks an ongoing casting operation
 type ActiveCast struct {
-	Request           *CastRequest
-	StartTime         time.Time
-	State             CastState
-	AttemptCount      int
-	LastError         string
-	SpellsInSequence  []string // For sequence casting
-	CurrentSpellIndex int
+	Request            *CastRequest
+	StartTime          time.Time
+	State              CastState
+	AttemptCount       int
+	LastError          string
+	ActionsInSequence  []action.Actionable // For sequence casting
+	CurrentActionIndex int
 }
 
 // CastState represents the state of a casting operation
@@ -121,13 +123,13 @@ type CastRecord struct {
 // CastCallback is called when a cast completes or fails
 type CastCallback func(result *CastResult)
 
-// CastResult contains the result of a casting operation
+// CastResult contains the result of an action operation
 type CastResult struct {
-	Request   *CastRequest
-	Success   bool
-	Error     string
-	Duration  time.Duration
-	SpellCast string // The actual spell that was cast
+	Request    *CastRequest
+	Success    bool
+	Error      string
+	Duration   time.Duration
+	ActionUsed string // The actual action that was used
 }
 
 // NewCastingEngine creates a new centralized casting engine
@@ -208,14 +210,15 @@ func (ce *CastingEngine) RequestCast(request *CastRequest) error {
 		}
 	}
 
-	// Check if we are already casting this spell on this target (prevent double triggers)
+	// Check if we are already casting this action on this target (prevent double triggers)
 	for _, active := range ce.activeCasts {
-		if active.Request.SpellName == request.SpellName &&
+		if active.Request.Action != nil && request.Action != nil &&
+			active.Request.Action.GetName() == request.Action.GetName() &&
 			active.Request.Target == request.Target &&
 			(active.State == CastStatePending || active.State == CastStateInProgress) {
 			ce.mu.Unlock()
 			log.Printf("Ignoring duplicate cast request: %s on %s (already in state %s)",
-				request.SpellName, request.Target, ce.castStateToString(active.State))
+				request.Action.GetName(), request.Target, ce.castStateToString(active.State))
 			return nil // Return nil as it's not an error, just redundant
 		}
 	}
@@ -228,35 +231,33 @@ func (ce *CastingEngine) RequestCast(request *CastRequest) error {
 		AttemptCount: 0,
 	}
 
-	// 1. Resolve spell selection based on cast type
-	if err := ce.resolveSpellSelection(activeCast); err != nil {
+	if err := ce.resolveActionSelection(activeCast); err != nil {
 		ce.mu.Unlock()
-		return fmt.Errorf("spell selection failed: %v", err)
+		return fmt.Errorf("action selection failed: %v", err)
 	}
 
-	// 2. Check if we are already casting this spell on this target (prevent double triggers)
-	// After resolution, request.SpellName should be populated for most types
-	// If it's a sequence, we check the first spell
 	for _, active := range ce.activeCasts {
 		if active.Request.Target == request.Target &&
 			(active.State == CastStatePending || active.State == CastStateInProgress) {
 
-			// If both are single spells and match
-			if ce.isEquivalentSpell(active.Request.SpellName, request.SpellName) {
+			// If both have actions and names match
+			if active.Request.Action != nil && request.Action != nil &&
+				active.Request.Action.GetName() == request.Action.GetName() {
 				ce.mu.Unlock()
 				log.Printf("Ignoring duplicate cast request: %s on %s (already in state %s)",
-					request.SpellName, request.Target, ce.castStateToString(active.State))
+					request.Action.GetName(), request.Target, ce.castStateToString(active.State))
 				return nil
 			}
 
 			// If one or both are sequences, check if they overlap or are identical
 			if (request.Type == CastTypeSequence || active.Request.Type == CastTypeSequence) &&
 				active.Request.Type == request.Type &&
-				ce.isEquivalentSpell(active.Request.SpellName, request.SpellName) {
-				// For sequences of the same type starting with the same spell, assume duplicate
+				active.Request.Action != nil && request.Action != nil &&
+				active.Request.Action.GetName() == request.Action.GetName() {
+				// For sequences of the same type starting with the same action, assume duplicate
 				ce.mu.Unlock()
-				log.Printf("Ignoring duplicate sequence request: type %s, current spell %s on %s",
-					ce.castTypeToString(request.Type), request.SpellName, request.Target)
+				log.Printf("Ignoring duplicate sequence request: type %s, current action %s on %s",
+					ce.castTypeToString(request.Type), request.Action.GetName(), request.Target)
 				return nil
 			}
 		}
@@ -295,8 +296,8 @@ func (ce *CastingEngine) validateRequest(request *CastRequest) error {
 	return nil
 }
 
-// resolveSpellSelection determines the actual spell(s) to cast based on request type
-func (ce *CastingEngine) resolveSpellSelection(activeCast *ActiveCast) error {
+// resolveActionSelection determines the actual action(s) to use based on request type
+func (ce *CastingEngine) resolveActionSelection(activeCast *ActiveCast) error {
 	request := activeCast.Request
 	context := request.Context
 
@@ -306,21 +307,23 @@ func (ce *CastingEngine) resolveSpellSelection(activeCast *ActiveCast) error {
 
 	switch request.Type {
 	case CastTypeManual:
-		// Spell already specified in request
-		if request.SpellName == "" {
-			return fmt.Errorf("spell name required for manual cast")
+		// Action already specified in request
+		if request.Action == nil {
+			return fmt.Errorf("action required for manual cast")
 		}
 
 	case CastTypeCure:
-		log.Printf("[CASTING DEBUG] Resolving CastTypeCure spell selection")
-		// Select optimal cure spell
+		// Select optimal cure action
 		cureOption, err := ce.selectOptimalCure(context)
 		if err != nil {
 			log.Printf("[CASTING DEBUG] Cure selection failed: %v", err)
 			return fmt.Errorf("cure selection failed: %v", err)
 		}
-		request.SpellName = cureOption.SpellName
-		log.Printf("[CASTING DEBUG] Cure selection completed: %s", cureOption.SpellName)
+		s, err := registry.GetSpell(cureOption.SpellName)
+		if err != nil {
+			return err
+		}
+		request.Action = s
 
 	case CastTypeBuff:
 		// Select optimal buff sequence
@@ -330,87 +333,104 @@ func (ce *CastingEngine) resolveSpellSelection(activeCast *ActiveCast) error {
 		}
 
 		if len(buffSequence) == 1 {
-			request.SpellName = buffSequence[0]
+			request.Action = buffSequence[0]
 		} else {
-			// Multiple spells - convert to sequence
+			// Multiple actions - convert to sequence
 			request.Type = CastTypeSequence
-			activeCast.SpellsInSequence = buffSequence
-			activeCast.CurrentSpellIndex = 0
-			request.SpellName = buffSequence[0]
+			activeCast.ActionsInSequence = buffSequence
+			activeCast.CurrentActionIndex = 0
+			request.Action = buffSequence[0]
 		}
 
 	case CastTypeNa:
-		// Select optimal "na" spell
-		naSpell, err := ce.selectOptimalNaSpell(context)
+		// Select optimal "na" action
+		naAction, err := ce.selectOptimalNaSpell(context)
 		if err != nil {
-			return fmt.Errorf("na spell selection failed: %v", err)
+			return fmt.Errorf("na action selection failed: %v", err)
 		}
-		request.SpellName = naSpell
+		request.Action = naAction
 
 	case CastTypeSequence:
-		// Spells already specified in SpellsInSequence
-		if len(activeCast.SpellsInSequence) == 0 {
-			return fmt.Errorf("spell sequence cannot be empty")
+		// Actions already specified in ActionsInSequence
+		if len(activeCast.ActionsInSequence) == 0 {
+			return fmt.Errorf("action sequence cannot be empty")
 		}
-		request.SpellName = activeCast.SpellsInSequence[0]
+		request.Action = activeCast.ActionsInSequence[0]
 
 	case CastTypeItem:
-		// Item usage - spell name is the item name
-		if request.SpellName == "" {
-			return fmt.Errorf("item name required for item cast")
+		// Item usage
+		if request.Action == nil {
+			return fmt.Errorf("item action required for item cast")
 		}
 
 	case CastTypeProtect:
-		// Select optimal Protect spell
+		// Select optimal Protect action
 		protectOption, err := ce.selectOptimalProtect(context)
 		if err != nil {
 			return fmt.Errorf("protect selection failed: %v", err)
 		}
-		request.SpellName = protectOption.SpellName
+		s, err := registry.GetSpell(protectOption.SpellName)
+		if err != nil {
+			return err
+		}
+		request.Action = s
 
 	case CastTypeShell:
-		// Select optimal Shell spell
+		// Select optimal Shell action
 		shellOption, err := ce.selectOptimalShell(context)
 		if err != nil {
 			return fmt.Errorf("shell selection failed: %v", err)
 		}
-		request.SpellName = shellOption.SpellName
+		s, err := registry.GetSpell(shellOption.SpellName)
+		if err != nil {
+			return err
+		}
+		request.Action = s
 
 	case CastTypeReraise:
-		// Select optimal Reraise spell
+		// Select optimal Reraise action
 		reraiseOption, err := ce.buffSelector.SelectOptimalReraise(context.CasterJobLevels, context.CasterMP)
 		if err != nil {
 			return fmt.Errorf("reraise selection failed: %v", err)
 		}
-		request.SpellName = reraiseOption.SpellName
+		s, err := registry.GetSpell(reraiseOption.SpellName)
+		if err != nil {
+			return err
+		}
+		request.Action = s
+
+	case CastTypeRegen:
+		// Select optimal Regen action
+		regenOption, err := ce.buffSelector.SelectOptimalRegen(context.CasterJobLevels, context.CasterMP)
+		if err != nil {
+			return fmt.Errorf("regen selection failed: %v", err)
+		}
+		s, err := registry.GetSpell(regenOption.SpellName)
+		if err != nil {
+			return err
+		}
+		request.Action = s
 
 	case CastTypeWhmPrep:
-		// Select WHM preparation sequence
-		whmSequence := []string{}
+		whmSequence := []action.Actionable{}
 
-		// 1. Light Arts (if available)
-		if level, exists := context.CasterJobLevels["SCH"]; (exists && level >= 10) || (context.CasterJobLevels["WHM"] >= 20 && context.CasterJobLevels["SCH"] >= 10) {
-			// Actually SCH main/sub 10.
-			whmSequence = append(whmSequence, "Light Arts")
-		} else if level, exists := context.CasterJobLevels["WHM"]; exists && level >= 1 {
-			// If not SCH, check if WHM main has it? No, WHM doesn't have Light Arts, SCH does.
-			// But if WHM/SCH, it's available at SCH 10.
+		if level, exists := context.CasterJobLevels["SCH"]; exists && level >= 10 {
+			if a, err := registry.GetAbility("Light Arts"); err == nil {
+				whmSequence = append(whmSequence, a)
+			}
 		}
 
-		// 2. Afflatus Solace (if available)
 		if level, exists := context.CasterJobLevels["WHM"]; exists && level >= 40 {
-			whmSequence = append(whmSequence, "Afflatus Solace")
+			if a, err := registry.GetAbility("Afflatus Solace"); err == nil {
+				whmSequence = append(whmSequence, a)
+			}
 		}
 
-		// 3. Highest Reraise
 		reraiseOption, err := ce.buffSelector.SelectOptimalReraise(context.CasterJobLevels, context.CasterMP)
 		if err == nil {
-			whmSequence = append(whmSequence, reraiseOption.SpellName)
-		}
-
-		// 4. Auspice
-		if level, exists := context.CasterJobLevels["WHM"]; exists && level >= 50 {
-			whmSequence = append(whmSequence, "Auspice")
+			if s, err := registry.GetSpell(reraiseOption.SpellName); err == nil {
+				whmSequence = append(whmSequence, s)
+			}
 		}
 
 		if len(whmSequence) == 0 {
@@ -418,12 +438,12 @@ func (ce *CastingEngine) resolveSpellSelection(activeCast *ActiveCast) error {
 		}
 
 		if len(whmSequence) == 1 {
-			request.SpellName = whmSequence[0]
+			request.Action = whmSequence[0]
 		} else {
 			request.Type = CastTypeSequence
-			activeCast.SpellsInSequence = whmSequence
-			activeCast.CurrentSpellIndex = 0
-			request.SpellName = whmSequence[0]
+			activeCast.ActionsInSequence = whmSequence
+			activeCast.CurrentActionIndex = 0
+			request.Action = whmSequence[0]
 		}
 
 	default:
@@ -435,60 +455,31 @@ func (ce *CastingEngine) resolveSpellSelection(activeCast *ActiveCast) error {
 
 // selectOptimalCure selects the best cure spell for the context
 func (ce *CastingEngine) selectOptimalCure(context *CastContext) (*cureSelector.CureOption, error) {
-	log.Printf("[CURE DEBUG] Starting cure selection process")
-	log.Printf("[CURE DEBUG] Caster MP: %d, MP Reservation: %d", context.CasterMP, ce.config.MPReservation)
-
 	availableMP := context.CasterMP - ce.config.MPReservation
 	if availableMP <= 0 {
-		log.Printf("[CURE DEBUG] Insufficient MP: available=%d, reservation=%d", context.CasterMP, ce.config.MPReservation)
 		return nil, fmt.Errorf("insufficient MP (need to reserve %d MP)", ce.config.MPReservation)
 	}
-
-	log.Printf("[CURE DEBUG] Available MP after reservation: %d", availableMP)
-
 	// Determine if this is an emergency situation based on HP percentage
-	prioritizeEfficiency := true // Default to efficiency mode
-	if context.TargetEntity != nil && context.TargetEntity.HPPercent < 30 {
+	prioritizeEfficiency := true                                            // Default to efficiency mode
+	if context.TargetEntity != nil && context.TargetEntity.HPPercent < 30 { //todo this is in configs
 		// Emergency mode for critically low HP (< 30%)
 		prioritizeEfficiency = false
-		log.Printf("[CURE DEBUG] Emergency mode activated: target HP %d%% < 30%%", context.TargetEntity.HPPercent)
-	} else {
-		log.Printf("[CURE DEBUG] Efficiency mode: target HP %d%% >= 30%%",
-			func() uint8 {
-				if context.TargetEntity != nil {
-					return context.TargetEntity.HPPercent
-				} else {
-					return 100
-				}
-			}())
 	}
 
 	if context.TargetEntity != nil {
-		log.Printf("[CURE DEBUG] Target entity: %s, HP: %d/%d (%d%%), Job: %s Level: %d",
-			context.TargetEntity.Name,
-			context.TargetEntity.HPcurrent,
-			context.TargetEntity.HPMax,
-			context.TargetEntity.HPPercent,
-			context.TargetEntity.Job,
-			context.TargetEntity.JobLevel)
-
 		// Calculate missing HP from actual values if available
 		var actualMissingHP int
 		if context.TargetEntity.HPMax > 0 && context.TargetEntity.HPcurrent <= context.TargetEntity.HPMax {
 			actualMissingHP = int(context.TargetEntity.HPMax - context.TargetEntity.HPcurrent)
-			log.Printf("[CURE DEBUG] Calculated missing HP from actual values: %d", actualMissingHP)
 		} else {
 			// Fall back to percentage calculation
 			missingPercent := 100 - int(context.TargetEntity.HPPercent)
 			estimatedMaxHP := 1000 // Default estimate
 			actualMissingHP = (missingPercent * estimatedMaxHP) / 100
-			log.Printf("[CURE DEBUG] Calculated missing HP from percentage: %d%% of %d = %d",
-				missingPercent, estimatedMaxHP, actualMissingHP)
 		}
 
 		// Only proceed if there's actually missing HP
 		if actualMissingHP <= 0 {
-			log.Printf("[CURE DEBUG] Target doesn't need healing (missing HP: %d)", actualMissingHP)
 			return nil, fmt.Errorf("target does not need healing")
 		}
 
@@ -501,19 +492,12 @@ func (ce *CastingEngine) selectOptimalCure(context *CastContext) (*cureSelector.
 		)
 
 		if err != nil {
-			log.Printf("[CURE DEBUG] SelectOptimalCure failed: %v", err)
 			return nil, err
 		}
-
-		log.Printf("[CURE DEBUG] Selected cure: %s (heal: %d, cost: %d MP, efficiency: %.2f)",
-			option.SpellName, option.HealAmount, option.MPCost, option.Efficiency)
-
 		return option, nil
 	}
 
 	if context.MissingHP > 0 {
-		log.Printf("[CURE DEBUG] Using MissingHP context: %d HP", context.MissingHP)
-
 		option, err := ce.cureSelector.SelectCureByDamage(
 			context.MissingHP,
 			availableMP,
@@ -521,22 +505,16 @@ func (ce *CastingEngine) selectOptimalCure(context *CastContext) (*cureSelector.
 		)
 
 		if err != nil {
-			log.Printf("[CURE DEBUG] SelectCureByDamage failed: %v", err)
 			return nil, err
 		}
 
-		log.Printf("[CURE DEBUG] Selected cure by damage: %s (heal: %d, cost: %d MP, efficiency: %.2f)",
-			option.SpellName, option.HealAmount, option.MPCost, option.Efficiency)
-
 		return option, nil
 	}
-
-	log.Printf("[CURE DEBUG] No valid cure target found")
 	return nil, fmt.Errorf("no cure target or missing HP specified")
 }
 
 // selectOptimalBuffs selects the best buff spells for the context
-func (ce *CastingEngine) selectOptimalBuffs(context *CastContext) ([]string, error) {
+func (ce *CastingEngine) selectOptimalBuffs(context *CastContext) ([]action.Actionable, error) {
 	availableMP := context.CasterMP - ce.config.MPReservation
 	if availableMP <= 0 {
 		return nil, fmt.Errorf("insufficient MP for buffs")
@@ -552,13 +530,17 @@ func (ce *CastingEngine) selectOptimalBuffs(context *CastContext) ([]string, err
 		return nil, err
 	}
 
-	// Convert buff options to spell names
-	spellNames := make([]string, len(buffSequence))
+	// Convert buff options to actionable items
+	actions := make([]action.Actionable, len(buffSequence))
 	for i, buff := range buffSequence {
-		spellNames[i] = buff.SpellName
+		s, err := registry.GetSpell(buff.SpellName)
+		if err != nil {
+			return nil, fmt.Errorf("buff spell %s not found in registry", buff.SpellName)
+		}
+		actions[i] = s
 	}
 
-	return spellNames, nil
+	return actions, nil
 }
 
 // selectOptimalProtect selects the best Protect spell for the context
@@ -589,29 +571,26 @@ func (ce *CastingEngine) selectOptimalShell(context *CastContext) (*buffSelector
 	)
 }
 
-// resolveSpellTarget determines the correct target for a spell based on its targeting requirements
-func (ce *CastingEngine) resolveSpellTarget(spellName string, originalTarget string, context *CastContext) (string, error) {
-	// For manual spells, we need to check the spell's targeting requirements
-	// First try to get spell info from our selectors
-
-	// Check if it's a cure spell
-	if cureSpell, err := ce.cureSelector.GetCureSpellInfo(spellName); err == nil {
-		return ce.resolveTargetByFlags(cureSpell.Targets, originalTarget, context)
+// resolveActionTarget determines the correct target for an action based on its targeting requirements
+func (ce *CastingEngine) resolveActionTarget(actionName string, originalTarget string, context *CastContext) (string, error) {
+	// If it's a known spell, resolve using its flags
+	if s, err := registry.GetSpell(actionName); err == nil {
+		return ce.resolveTargetByFlags(s.GetTargetFlags(), originalTarget, context)
 	}
 
-	// Check if it's a buff spell (including Bar spells)
-	if buffSpell, err := ce.buffSelector.GetBuffSpellInfo(spellName); err == nil {
-		return ce.resolveTargetByFlags(buffSpell.Targets, originalTarget, context)
+	// If it's a known ability, resolve using its flags
+	if a, err := registry.GetAbility(actionName); err == nil {
+		return ce.resolveTargetByFlags(a.GetTargetFlags(), originalTarget, context)
 	}
 
-	// Check if it's a na spell
-	if _, err := ce.naSelector.GetNaSpellInfo(spellName); err == nil {
-		return originalTarget, nil
+	// If it's a known item, resolve using its flags
+	if i, err := registry.GetItem(actionName); err == nil {
+		return ce.resolveTargetByFlags(i.GetTargetFlags(), originalTarget, context)
 	}
 
-	// Fallback to naming patterns for unknown spells
-	lowerName := strings.ToLower(spellName)
-	if ce.isAreaSpellByName(spellName) ||
+	// Fallback to naming patterns for unknown actions
+	lowerName := strings.ToLower(actionName)
+	if ce.isAreaSpellByName(actionName) ||
 		lowerName == "light arts" || lowerName == "dark arts" ||
 		lowerName == "afflatus solace" || lowerName == "afflatus misery" ||
 		lowerName == "auspice" || strings.Contains(lowerName, "reraise") {
@@ -622,19 +601,19 @@ func (ce *CastingEngine) resolveSpellTarget(spellName string, originalTarget str
 		return "me", nil // Fallback
 	}
 
-	// Default to original target for single-target spells
+	// Default to original target for single-target actions
 	return originalTarget, nil
 }
 
 // resolveTargetByFlags resolves target based on spell target flags
-func (ce *CastingEngine) resolveTargetByFlags(targetFlags spell.TargetFlags, originalTarget string, context *CastContext) (string, error) {
+func (ce *CastingEngine) resolveTargetByFlags(targetFlags action.TargetFlags, originalTarget string, context *CastContext) (string, error) {
 	// If spell can ONLY target self (and not other players), use caster name
 	// TargetSelf is often combined with other flags for spells that CAN target others but can also be cast on self.
 	// But in FFXI, area spells like Protectra have ONLY TargetSelf (and maybe TargetAoE).
 	// Single target spells have TargetSelf | TargetPartyMember | TargetPlayer.
 
 	// A spell is "self-only" if it HAS TargetSelf AND NOT (TargetPartyMember OR TargetPlayer OR TargetEnemy)
-	isSelfOnly := (targetFlags&spell.TargetSelf != 0) && (targetFlags&(spell.TargetPartyMember|spell.TargetPlayer|spell.TargetEnemy) == 0)
+	isSelfOnly := (targetFlags&action.TargetSelf != 0) && (targetFlags&(action.TargetPartyMember|action.TargetPlayer|action.TargetEnemy) == 0)
 
 	if isSelfOnly {
 		if context.CasterName != "" {
@@ -693,10 +672,10 @@ func (ce *CastingEngine) isEquivalentSpell(spell1, spell2 string) bool {
 }
 
 // selectOptimalNaSpell selects the best "na" spell for the context
-func (ce *CastingEngine) selectOptimalNaSpell(context *CastContext) (string, error) {
+func (ce *CastingEngine) selectOptimalNaSpell(context *CastContext) (action.Actionable, error) {
 	availableMP := context.CasterMP - ce.config.MPReservation
 	if availableMP <= 0 {
-		return "", fmt.Errorf("insufficient MP for na spell")
+		return nil, fmt.Errorf("insufficient MP for na spell")
 	}
 
 	naOption, err := ce.naSelector.SelectOptimalNaSpell(
@@ -704,13 +683,17 @@ func (ce *CastingEngine) selectOptimalNaSpell(context *CastContext) (string, err
 		availableMP,
 	)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return naOption.SpellName, nil
+	s, err := registry.GetSpell(naOption.SpellName)
+	if err != nil {
+		return nil, fmt.Errorf("na spell %s not found in registry", naOption.SpellName)
+	}
+	return s, nil
 }
 
-// processCast handles the casting process for an active cast
+// processCast handles the action execution process for an active cast
 func (ce *CastingEngine) processCast(activeCast *ActiveCast) {
 	for activeCast.AttemptCount < ce.config.RetryAttempts {
 		// Check if cast was cancelled before starting/retrying
@@ -730,20 +713,28 @@ func (ce *CastingEngine) processCast(activeCast *ActiveCast) {
 		//ce.logQueueState("CAST_IN_PROGRESS", activeCast.Request.ID)
 		ce.mu.Unlock()
 
-		// Execute the cast through the casting engine's internal logic
+		// Execute the action through the casting engine's internal logic
 		success, err := ce.executeCast(activeCast)
 
 		if success {
-			// Cast command was sent successfully to the client
-			// Now we wait for the client to report completion via NotifySpellComplete
+			// Action command was sent successfully to the client
+			// Now we wait for the client to report completion via NotifyActionComplete
 			// The cast remains in CastStateInProgress until then
-			log.Printf("Cast command sent successfully: %s -> %s", activeCast.Request.ID, activeCast.Request.SpellName)
+			actionName := "unknown"
+			if activeCast.Request.Action != nil {
+				actionName = activeCast.Request.Action.GetName()
+			}
+			log.Printf("Action command sent successfully: %s -> %s", activeCast.Request.ID, actionName)
 			return
 		}
 
 		// Handle failure
 		activeCast.LastError = err.Error()
-		log.Printf("Cast execution failed: %s -> %s (error: %s)", activeCast.Request.ID, activeCast.Request.SpellName, err.Error())
+		actionName := "unknown"
+		if activeCast.Request.Action != nil {
+			actionName = activeCast.Request.Action.GetName()
+		}
+		log.Printf("Action execution failed: %s -> %s (error: %s)", activeCast.Request.ID, actionName, err.Error())
 
 		// Check if we should retry
 		if activeCast.AttemptCount < ce.config.RetryAttempts {
@@ -766,15 +757,19 @@ func (ce *CastingEngine) processCast(activeCast *ActiveCast) {
 		ce.mu.Lock()
 		activeCast.State = CastStateFailed
 		ce.mu.Unlock()
-		log.Printf("Cast failed after %d attempts: %s -> %s", ce.config.RetryAttempts, activeCast.Request.ID, activeCast.Request.SpellName)
+		log.Printf("Action failed after %d attempts: %s -> %s", ce.config.RetryAttempts, activeCast.Request.ID, actionName)
 		return
 	}
 }
 
-// executeCast executes the actual spell cast (interface with game client)
+// executeCast executes the actual action (interface with game client)
 func (ce *CastingEngine) executeCast(activeCast *ActiveCast) (bool, error) {
 	request := activeCast.Request
-	spellName := request.SpellName
+	if request.Action == nil {
+		return false, fmt.Errorf("no action specified in request")
+	}
+
+	actionName := request.Action.GetName()
 	originalTarget := request.Target
 
 	// Use original target from context if it's a sequence and we might have modified request.Target in a previous step
@@ -782,34 +777,34 @@ func (ce *CastingEngine) executeCast(activeCast *ActiveCast) (bool, error) {
 		originalTarget = request.Context.OriginalTarget
 	}
 
-	// Resolve the correct target for this spell
-	resolvedTarget, err := ce.resolveSpellTarget(spellName, originalTarget, request.Context)
+	// Resolve the correct target for this action
+	resolvedTarget, err := ce.resolveActionTarget(actionName, originalTarget, request.Context)
 	if err != nil {
-		return false, fmt.Errorf("failed to resolve target for spell %s: %v", spellName, err)
+		return false, fmt.Errorf("failed to resolve target for action %s: %v", actionName, err)
 	}
 
-	// Update the request with the resolved target for the current spell execution
+	// Update the request with the resolved target for the current execution
 	// But ONLY if it's different, to avoid unnecessary updates if we're debugging
 	if request.Target != resolvedTarget {
 		request.Target = resolvedTarget
 	}
 
-	// Log the casting attempt
-	log.Printf("Executing cast: %s on %s (attempt %d)", spellName, resolvedTarget, activeCast.AttemptCount)
+	// Log the execution attempt
+	log.Printf("Executing action: %s on %s (attempt %d)", actionName, resolvedTarget, activeCast.AttemptCount)
 
-	// If we have a client manager, use it to execute the cast
+	// If we have a client manager, use it to execute the request
 	if ce.clientManager != nil {
 		err := ce.clientManager.ExecuteCastRequest(request)
 		if err != nil {
-			return false, fmt.Errorf("failed to execute cast through client manager: %v", err)
+			return false, fmt.Errorf("failed to execute action through client manager: %v", err)
 		}
 	} else {
 		// Fallback for testing or when no client manager is available
-		log.Printf("No client manager available, simulating cast execution")
+		log.Printf("No client manager available, simulating action execution")
 	}
 
 	// Return success - the actual completion will be reported by the client
-	// For sequence casting, the next spell will be queued when this one completes
+	// For sequence casting, the next action will be queued when this one completes
 	return true, nil
 }
 
@@ -850,12 +845,17 @@ func (ce *CastingEngine) completeCast(activeCast *ActiveCast) {
 
 	// Call callback if provided
 	if activeCast.Request.Callback != nil {
+		actionName := "unknown"
+		if activeCast.Request.Action != nil {
+			actionName = activeCast.Request.Action.GetName()
+		}
+
 		result := &CastResult{
-			Request:   activeCast.Request,
-			Success:   activeCast.State == CastStateCompleted,
-			Error:     activeCast.LastError,
-			Duration:  record.Duration,
-			SpellCast: activeCast.Request.SpellName,
+			Request:    activeCast.Request,
+			Success:    activeCast.State == CastStateCompleted,
+			Error:      activeCast.LastError,
+			Duration:   record.Duration,
+			ActionUsed: actionName,
 		}
 
 		go activeCast.Request.Callback(result)
@@ -935,17 +935,19 @@ func (ce *CastingEngine) SetClientManager(clientManager *ClientManager) {
 func (ce *CastingEngine) logQueueState(operation string, requestID string) {
 	log.Printf("[QUEUE DEBUG] %s - RequestID: %s", operation, requestID)
 	log.Printf("  Active casts (%d):", len(ce.activeCasts))
-	for id, cast := range ce.activeCasts {
-		spellName := cast.Request.SpellName
-		if spellName == "" && len(cast.SpellsInSequence) > 0 {
-			if cast.CurrentSpellIndex < len(cast.SpellsInSequence) {
-				spellName = cast.SpellsInSequence[cast.CurrentSpellIndex]
+	for _, cast := range ce.activeCasts {
+		actionName := "unknown"
+		if cast.Request.Action != nil {
+			actionName = cast.Request.Action.GetName()
+		} else if len(cast.ActionsInSequence) > 0 {
+			if cast.CurrentActionIndex < len(cast.ActionsInSequence) {
+				actionName = cast.ActionsInSequence[cast.CurrentActionIndex].GetName()
 			} else {
-				spellName = "SEQUENCE_DONE"
+				actionName = "SEQUENCE_DONE"
 			}
 		}
 		log.Printf("    - %s: %s (State: %s, Priority: %d, Target: %s)",
-			id, spellName, ce.castStateToString(cast.State),
+			cast.Request.ID, actionName, ce.castStateToString(cast.State),
 			cast.Request.Priority, cast.Request.Target)
 	}
 }
@@ -998,51 +1000,50 @@ func (ce *CastingEngine) castTypeToString(castType CastType) string {
 	}
 }
 
-// NotifySpellComplete notifies the engine that a spell has completed
-// This is called by the client manager when a spell finishes casting
-func (ce *CastingEngine) NotifySpellComplete(requestID string, success bool, errorMsg string) {
+// NotifyActionComplete notifies the engine that an action has completed
+// This is called by the client manager when an action finishes
+func (ce *CastingEngine) NotifyActionComplete(requestID string, success bool, errorMsg string) {
 	ce.mu.Lock()
 	defer ce.mu.Unlock()
 
 	activeCast, exists := ce.activeCasts[requestID]
 	if !exists {
 		log.Printf("Received completion notification for unknown request: %s", requestID)
-		//ce.logQueueState("COMPLETION_UNKNOWN_REQUEST", requestID)
 		return
 	}
 
 	if !success {
-		// Spell failed
+		// Action failed
 		activeCast.State = CastStateFailed
 		activeCast.LastError = errorMsg
-		log.Printf("Spell failed: %s -> %s (error: %s)", requestID, activeCast.Request.SpellName, errorMsg)
+		actionName := "unknown"
+		if activeCast.Request.Action != nil {
+			actionName = activeCast.Request.Action.GetName()
+		}
+		log.Printf("Action failed: %s -> %s (error: %s)", requestID, actionName, errorMsg)
 
 		// Complete the cast since it failed
 		go ce.completeCast(activeCast)
 		return
 	}
 
-	// Spell succeeded - check if this is part of a sequence
-	if activeCast.Request.Type == CastTypeSequence && activeCast.CurrentSpellIndex < len(activeCast.SpellsInSequence)-1 {
-		// More spells in sequence - advance to the next one
-		activeCast.CurrentSpellIndex++
-		activeCast.Request.SpellName = activeCast.SpellsInSequence[activeCast.CurrentSpellIndex]
+	// Action succeeded - check if this is part of a sequence
+	if activeCast.Request.Type == CastTypeSequence && activeCast.CurrentActionIndex < len(activeCast.ActionsInSequence)-1 {
+		// More actions in sequence - advance to the next one
+		activeCast.CurrentActionIndex++
+		activeCast.Request.Action = activeCast.ActionsInSequence[activeCast.CurrentActionIndex]
 
-		log.Printf("Sequence spell completed, queuing next: %s (%d/%d) after %v delay",
-			activeCast.Request.SpellName,
-			activeCast.CurrentSpellIndex+1,
-			len(activeCast.SpellsInSequence),
+		log.Printf("Sequence action completed, queuing next: %s (%d/%d) after %v delay",
+			activeCast.Request.Action.GetName(),
+			activeCast.CurrentActionIndex+1,
+			len(activeCast.ActionsInSequence),
 			ce.config.SequenceDelay)
 
-		// Log queue state after sequence advancement
-		//ce.logQueueState("SEQUENCE_ADVANCED", requestID)
-
-		// Reset attempt count for the new spell
+		// Reset attempt count for the new action
 		activeCast.AttemptCount = 0
 		activeCast.State = CastStatePending
 
-		// Execute the next spell in the sequence after a small delay
-		// Now that we have real-time ready checks, we can use a much smaller delay
+		// Execute the next action in the sequence after a small delay
 		go func() {
 			time.Sleep(500 * time.Millisecond)
 			ce.processCast(activeCast)
@@ -1050,18 +1051,16 @@ func (ce *CastingEngine) NotifySpellComplete(requestID string, success bool, err
 		return
 	}
 
-	// Sequence complete or single spell - mark as completed
+	// Sequence complete or single action - mark as completed
 	activeCast.State = CastStateCompleted
-	log.Printf("Spell sequence completed successfully: %s", requestID)
+	log.Printf("Action sequence completed successfully: %s", requestID)
 
-	// Final check: remove from active casts immediately after completion
-	// to ensure it doesn't block the concurrent limit
 	go ce.completeCast(activeCast)
 }
 
-// ResolveSpellTarget exposes the target resolution functionality for testing
-func (ce *CastingEngine) ResolveSpellTarget(spellName string, originalTarget string, context *CastContext) (string, error) {
-	return ce.resolveSpellTarget(spellName, originalTarget, context)
+// ResolveActionTarget exposes the target resolution functionality for testing
+func (ce *CastingEngine) ResolveActionTarget(actionName string, originalTarget string, context *CastContext) (string, error) {
+	return ce.resolveActionTarget(actionName, originalTarget, context)
 }
 
 // SelectOptimalCure exposes the cure selection functionality for testing
@@ -1069,7 +1068,7 @@ func (ce *CastingEngine) SelectOptimalCure(context *CastContext) (*cureSelector.
 	return ce.selectOptimalCure(context)
 }
 
-func (ce *CastingEngine) SelectOptimalNaSpell(context *CastContext) (string, error) {
+func (ce *CastingEngine) SelectOptimalNaAction(context *CastContext) (action.Actionable, error) {
 	return ce.selectOptimalNaSpell(context)
 }
 
@@ -1089,6 +1088,16 @@ func (ce *CastingEngine) SelectOptimalReraise(jobLevels map[string]int, availabl
 	}
 
 	return ce.buffSelector.SelectOptimalReraise(jobLevels, availableMP)
+}
+
+// SelectOptimalRegen selects the highest Regen spell available
+func (ce *CastingEngine) SelectOptimalRegen(jobLevels map[string]int, availableMP int) (*buffSelector.BuffOption, error) {
+	availableMP = availableMP - ce.config.MPReservation
+	if availableMP <= 0 {
+		return nil, fmt.Errorf("insufficient MP for Regen")
+	}
+
+	return ce.buffSelector.SelectOptimalRegen(jobLevels, availableMP)
 }
 
 func (ce *CastingEngine) GetStats() map[string]interface{} {

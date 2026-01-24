@@ -70,6 +70,7 @@ func (tp *TextParser) initializeDefaultTriggers() {
 	tp.triggerMap["protect"] = 3
 	tp.triggerMap["shell"] = 3
 	tp.triggerMap["haste"] = 5
+	tp.triggerMap["regen"] = 4
 	tp.triggerMap["whmprep"] = 7
 	tp.triggerMap["auspice"] = 4
 	tp.triggerMap["reraise"] = 6

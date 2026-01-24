@@ -1,14 +1,15 @@
 package casting
 
 import (
+	"PandaBot/internal/action"
 	"fmt"
 	"time"
 )
 
 // ClientInterface defines how the casting engine communicates with game clients
 type ClientInterface interface {
-	// SendSpellCommand sends a spell casting command to the client
-	SendSpellCommand(command *SpellCommand) error
+	// SendActionCommand sends an action command to the client
+	SendActionCommand(command *ActionCommand) error
 
 	// GetClientInfo returns information about the client's current state
 	GetClientInfo() *ClientInfo
@@ -28,22 +29,26 @@ type ClientInterface interface {
 	UnlockExecution()
 }
 
-// SpellCommand represents a spell casting command to send to a client
-type SpellCommand struct {
-	ID       string
-	Spell    string
-	Target   string
-	Priority int
-	Timeout  time.Duration
+// ActionCommand represents an action command to send to a client
+type ActionCommand struct {
+	ID         string
+	ActionName string
+	ActionID   uint16
+	ActionType action.ActionType
+	Target     string
+	Priority   int
+	Timeout    time.Duration
 }
 
 // ClientInfo contains information about a client's current state
 type ClientInfo struct {
-	PlayerName  string
-	MP          int
-	JobLevels   map[string]int
-	IsConnected bool
-	LastSeen    time.Time
+	PlayerName     string
+	MP             int
+	JobLevels      map[string]int
+	KnownSpells    map[string]bool
+	KnownAbilities map[string]bool
+	IsConnected    bool
+	LastSeen       time.Time
 }
 
 // ClientManager manages multiple game clients for the casting engine
@@ -89,6 +94,10 @@ func (cm *ClientManager) GetConnectedClients() map[string]ClientInterface {
 
 // ExecuteCastRequest executes a cast request using available clients
 func (cm *ClientManager) ExecuteCastRequest(request *CastRequest) error {
+	if request.Action == nil {
+		return fmt.Errorf("action is required for cast request")
+	}
+
 	// Find a suitable client to execute the cast
 	client, err := cm.selectClientForCast(request)
 	if err != nil {
@@ -118,23 +127,25 @@ func (cm *ClientManager) ExecuteCastRequest(request *CastRequest) error {
 		request.Context.CasterName = clientInfo.PlayerName
 	}
 
-	// Resolve the correct target for this spell using the casting engine
-	resolvedTarget, err := cm.engine.resolveSpellTarget(request.SpellName, request.Target, request.Context)
+	// Resolve the correct target for this action using the casting engine
+	resolvedTarget, err := cm.engine.resolveActionTarget(request.Action.GetName(), request.Target, request.Context)
 	if err != nil {
 		return fmt.Errorf("failed to resolve target: %v", err)
 	}
 
-	// Create spell command with resolved target
-	command := &SpellCommand{
-		ID:       request.ID,
-		Spell:    request.SpellName,
-		Target:   resolvedTarget,
-		Priority: request.Priority,
-		Timeout:  request.Timeout,
+	// Create action command with resolved target
+	command := &ActionCommand{
+		ID:         request.ID,
+		ActionName: request.Action.GetName(),
+		ActionID:   request.Action.GetID(),
+		ActionType: request.Action.GetActionType(),
+		Target:     resolvedTarget,
+		Priority:   request.Priority,
+		Timeout:    request.Timeout,
 	}
 
 	// Send command to client
-	return client.SendSpellCommand(command)
+	return client.SendActionCommand(command)
 }
 
 // selectClientForCast selects the best client to execute a cast request
@@ -183,19 +194,25 @@ func (cm *ClientManager) selectClientForCast(request *CastRequest) (ClientInterf
 
 // BroadcastCastRequest sends a cast request to all connected clients
 func (cm *ClientManager) BroadcastCastRequest(request *CastRequest) []error {
+	if request.Action == nil {
+		return []error{fmt.Errorf("action is required for broadcast request")}
+	}
+
 	connectedClients := cm.GetConnectedClients()
 	var errors []error
 
 	for clientID, client := range connectedClients {
-		command := &SpellCommand{
-			ID:       fmt.Sprintf("%s_%s", request.ID, clientID),
-			Spell:    request.SpellName,
-			Target:   request.Target,
-			Priority: request.Priority,
-			Timeout:  request.Timeout,
+		command := &ActionCommand{
+			ID:         fmt.Sprintf("%s_%s", request.ID, clientID),
+			ActionName: request.Action.GetName(),
+			ActionID:   request.Action.GetID(),
+			ActionType: request.Action.GetActionType(),
+			Target:     request.Target,
+			Priority:   request.Priority,
+			Timeout:    request.Timeout,
 		}
 
-		if err := client.SendSpellCommand(command); err != nil {
+		if err := client.SendActionCommand(command); err != nil {
 			errors = append(errors, fmt.Errorf("client %s: %v", clientID, err))
 		}
 	}
@@ -203,10 +220,10 @@ func (cm *ClientManager) BroadcastCastRequest(request *CastRequest) []error {
 	return errors
 }
 
-// NotifySpellComplete notifies the casting engine that a spell has completed
-func (cm *ClientManager) NotifySpellComplete(commandID string, success bool, error string) {
+// NotifyActionComplete notifies the casting engine that an action has completed
+func (cm *ClientManager) NotifyActionComplete(commandID string, success bool, errorMsg string) {
 	// Notify the casting engine to handle sequence progression and completion
-	cm.engine.NotifySpellComplete(commandID, success, error)
+	cm.engine.NotifyActionComplete(commandID, success, errorMsg)
 }
 
 // GetClientStats returns statistics about managed clients
@@ -225,4 +242,25 @@ func (cm *ClientManager) GetClientStats() map[string]interface{} {
 		"connected_clients": connectedCount,
 		"disconnected":      totalClients - connectedCount,
 	}
+}
+
+// GetClientInfoByPlayerName returns information about a client by player name
+func (cm *ClientManager) GetClientInfoByPlayerName(playerName string) *ClientInfo {
+	for _, client := range cm.clients {
+		info := client.GetClientInfo()
+		if info.PlayerName == playerName {
+			return info
+		}
+	}
+	return nil
+}
+
+// GetFirstClientInfo returns information about the first available client
+func (cm *ClientManager) GetFirstClientInfo() *ClientInfo {
+	for _, client := range cm.clients {
+		if client.IsConnected() {
+			return client.GetClientInfo()
+		}
+	}
+	return nil
 }

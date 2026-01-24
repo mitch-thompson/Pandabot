@@ -1,5 +1,7 @@
 package spell
 
+import "PandaBot/internal/action"
+
 type Spell struct {
 	English    string
 	ID         uint16 // Packet spell ID
@@ -9,11 +11,17 @@ type Spell struct {
 	LevelReq   map[string]int // e.g. {"WHM": 17, "RDM": 21}
 	Type       SpellType
 	Element    Element
-	Targets    TargetFlags
+	Targets    action.TargetFlags
 	Priority   int // for auto-selection (higher = more important)
 	IsAoE      bool
 	HealAmount int // For healing spells
 }
+
+func (s *Spell) GetName() string                    { return s.English }
+func (s *Spell) GetID() uint16                      { return s.ID }
+func (s *Spell) GetActionType() action.ActionType   { return action.ActionTypeSpell }
+func (s *Spell) GetPriority() int                   { return s.Priority }
+func (s *Spell) GetTargetFlags() action.TargetFlags { return s.Targets }
 
 type SpellType uint8
 
@@ -39,16 +47,4 @@ const (
 	Water
 	Light
 	Dark
-)
-
-type TargetFlags uint8
-
-const (
-	TargetSelf       TargetFlags = 1 << iota // Can only target self (area spells like Protectra, Shellra)
-	TargetPartyMember                        // Can target any party member (single target spells like Protect, Shell)
-	TargetPlayer                             // Can target any player (including non-party members)
-	TargetEnemy                              // Can target enemies
-	TargetAlly       = TargetSelf | TargetPartyMember | TargetPlayer // Legacy: any friendly target
-	TargetAoE
-	TargetCone
 )

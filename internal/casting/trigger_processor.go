@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"PandaBot/internal/entity"
+	"PandaBot/internal/registry"
 )
 
 var globalRequestSeq uint64
@@ -144,6 +145,15 @@ func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender strin
 		seq++
 		if err != nil {
 			return nil, fmt.Errorf("failed to process haste trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "regen":
+		log.Printf("Regen received from %s", sender)
+		requestID, err := tp.processRegenTrigger(sender, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process regen trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
 
@@ -297,16 +307,21 @@ func (tp *TriggerProcessor) processNaTrigger(spellName string, target string, pr
 
 	// Create casting request for na spell
 	requestID := fmt.Sprintf("na_%d", timestamp)
-	request := &CastRequest{
-		ID:        requestID,
-		Type:      CastTypeManual, // Use manual type with specific spell
-		SpellName: spellName,
-		Target:    target,
-		Priority:  priority,
-		Context:   context,
+	s, err := registry.GetSpell(spellName)
+	if err != nil {
+		return "", err
 	}
 
-	err := tp.engine.RequestCast(request)
+	request := &CastRequest{
+		ID:       requestID,
+		Type:     CastTypeManual, // Use manual type with specific spell
+		Action:   s,
+		Target:   target,
+		Priority: priority,
+		Context:  context,
+	}
+
+	err = tp.engine.RequestCast(request)
 	if err != nil {
 		return "", fmt.Errorf("failed to request na spell cast: %v", err)
 	}
@@ -459,17 +474,22 @@ func (tp *TriggerProcessor) processBuffTrigger(buffType string, target string, p
 
 // castManualSpell casts a specific spell manually
 func (tp *TriggerProcessor) castManualSpell(spellName string, target string, priority int, context *CastContext, timestamp int64) (string, error) {
-	requestID := fmt.Sprintf("manual_%d", timestamp)
-	request := &CastRequest{
-		ID:        requestID,
-		Type:      CastTypeManual,
-		SpellName: spellName,
-		Target:    target,
-		Priority:  priority,
-		Context:   context,
+	s, err := registry.GetSpell(spellName)
+	if err != nil {
+		return "", err
 	}
 
-	err := tp.engine.RequestCast(request)
+	requestID := fmt.Sprintf("manual_%d", timestamp)
+	request := &CastRequest{
+		ID:       requestID,
+		Type:     CastTypeManual,
+		Action:   s,
+		Target:   target,
+		Priority: priority,
+		Context:  context,
+	}
+
+	err = tp.engine.RequestCast(request)
 	if err != nil {
 		return "", fmt.Errorf("failed to request manual spell cast: %v", err)
 	}
@@ -500,18 +520,12 @@ func (tp *TriggerProcessor) processProtectTrigger(target string, priority int, c
 func (tp *TriggerProcessor) processReraiseTrigger(target string, priority int, context *CastContext, timestamp int64) (string, error) {
 	requestID := fmt.Sprintf("reraise_%d", timestamp)
 	request := &CastRequest{
-		ID:        requestID,
-		Type:      CastTypeManual,
-		SpellName: "Reraise", // Default, engine will resolve if we use a specific type, but let's select it here if possible
-		Target:    target,
-		Priority:  priority,
-		Context:   context,
+		ID:       requestID,
+		Type:     CastTypeReraise, // Let engine select optimal Reraise level
+		Target:   target,
+		Priority: priority,
+		Context:  context,
 	}
-
-	// We can't easily select the optimal reraise here without access to buffSelector
-	// So let's add a CastTypeReraise to the engine instead, or let CastTypeWhmPrep be smarter.
-	// Actually, let's just change the Type to a new CastTypeReraise.
-	request.Type = CastTypeReraise
 
 	err := tp.engine.RequestCast(request)
 	if err != nil {
@@ -535,6 +549,25 @@ func (tp *TriggerProcessor) processShellTrigger(target string, priority int, con
 	err := tp.engine.RequestCast(request)
 	if err != nil {
 		return "", fmt.Errorf("failed to request shell cast: %v", err)
+	}
+
+	return requestID, nil
+}
+
+// processRegenTrigger processes a regen trigger
+func (tp *TriggerProcessor) processRegenTrigger(target string, priority int, context *CastContext, timestamp int64) (string, error) {
+	requestID := fmt.Sprintf("regen_%d", timestamp)
+	request := &CastRequest{
+		ID:       requestID,
+		Type:     CastTypeRegen, // Let engine select optimal Regen level
+		Target:   target,
+		Priority: priority,
+		Context:  context,
+	}
+
+	err := tp.engine.RequestCast(request)
+	if err != nil {
+		return "", fmt.Errorf("failed to request regen cast: %v", err)
 	}
 
 	return requestID, nil

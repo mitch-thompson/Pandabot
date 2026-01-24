@@ -2,7 +2,10 @@ package naSelector
 
 import (
 	"PandaBot/internal/entity"
+	"PandaBot/internal/registry"
+	"PandaBot/internal/spell"
 	"fmt"
+	"log"
 	"sort"
 	"sync"
 )
@@ -18,8 +21,7 @@ type StatusEffect struct {
 // NaSpellOption represents a "na" spell option with its effectiveness
 type NaSpellOption struct {
 	SpellName string
-	MPCost    int
-	CastTime  float32
+	Spell     *spell.Spell
 	Targets   []int // Status effect IDs this spell can remove
 	Priority  int   // Spell priority (higher is better)
 }
@@ -82,68 +84,31 @@ func (ns *NaSpellSelector) initializeDefaultMappings() {
 		ns.statusEffectMap[effect.ID] = effect
 	}
 
-	// "Na" spell definitions
-	naSpells := []*NaSpellOption{
-		{
-			SpellName: "Poisona",
-			MPCost:    8,
-			CastTime:  1.5,
-			Targets:   []int{3}, // Poison
-			Priority:  5,
-		},
-		{
-			SpellName: "Paralyna",
-			MPCost:    12,
-			CastTime:  1.5,
-			Targets:   []int{4}, // Paralysis
-			Priority:  8,
-		},
-		{
-			SpellName: "Blindna",
-			MPCost:    8,
-			CastTime:  1.5,
-			Targets:   []int{5}, // Blindness
-			Priority:  4,
-		},
-		{
-			SpellName: "Silena",
-			MPCost:    12,
-			CastTime:  1.5,
-			Targets:   []int{6}, // Silence
-			Priority:  7,
-		},
-		{
-			SpellName: "Stona",
-			MPCost:    15,
-			CastTime:  2.0,
-			Targets:   []int{7}, // Petrification
-			Priority:  9,
-		},
-		{
-			SpellName: "Viruna",
-			MPCost:    18,
-			CastTime:  2.0,
-			Targets:   []int{8, 31}, // Disease, Plague
-			Priority:  6,
-		},
-		{
-			SpellName: "Cursna",
-			MPCost:    20,
-			CastTime:  2.5,
-			Targets:   []int{9, 20}, // Curse, Doom
-			Priority:  10,
-		},
-		{
-			SpellName: "Erase",
-			MPCost:    18,
-			CastTime:  1.0,
-			Targets:   []int{11, 12, 13, 14, 15, 16, 17, 136, 137, 138, 139, 140, 141, 142, 146, 147}, // Bind, Weight, Slow, Stat Downs, Acc/Eva Down
-			Priority:  4,
-		},
+	// Names of "Na" spells and their target status effects
+	spellTargets := map[string][]int{
+		"Poisona":  {3},
+		"Paralyna": {4},
+		"Blindna":  {5},
+		"Silena":   {6},
+		"Stona":    {7},
+		"Viruna":   {8, 31},
+		"Cursna":   {9, 20},
+		"Erase":    {11, 12, 13, 14, 15, 16, 17, 136, 137, 138, 139, 140, 141, 142, 146, 147},
 	}
 
-	for _, spell := range naSpells {
-		ns.naSpellMap[spell.SpellName] = spell
+	for name, targets := range spellTargets {
+		s, err := registry.GetSpell(name)
+		if err != nil {
+			log.Printf("[NA SELECTOR] Warning: spell %s not found in registry", name)
+			continue
+		}
+
+		ns.naSpellMap[name] = &NaSpellOption{
+			SpellName: name,
+			Spell:     s,
+			Targets:   targets,
+			Priority:  s.Priority,
+		}
 	}
 }
 
@@ -224,15 +189,15 @@ func (ns *NaSpellSelector) SelectOptimalNaSpell(statusEffects []int, availableMP
 
 	// Find all applicable spells
 	var applicableSpells []*NaSpellOption
-	for _, spell := range ns.naSpellMap {
-		if spell.MPCost > availableMP {
+	for _, option := range ns.naSpellMap {
+		if int(option.Spell.MPCost) > availableMP {
 			continue // Can't afford this spell
 		}
 
 		// Check if this spell can remove any of the status effects
 		canRemove := false
 		for _, effectID := range statusEffects {
-			for _, target := range spell.Targets {
+			for _, target := range option.Targets {
 				if target == effectID {
 					canRemove = true
 					break
@@ -244,7 +209,7 @@ func (ns *NaSpellSelector) SelectOptimalNaSpell(statusEffects []int, availableMP
 		}
 
 		if canRemove {
-			applicableSpells = append(applicableSpells, spell)
+			applicableSpells = append(applicableSpells, option)
 		}
 	}
 
@@ -281,12 +246,12 @@ func (ns *NaSpellSelector) GetNaSpellInfo(spellName string) (*NaSpellOption, err
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
 
-	spell, exists := ns.naSpellMap[spellName]
+	spellOption, exists := ns.naSpellMap[spellName]
 	if !exists {
 		return nil, fmt.Errorf("na spell %s not found", spellName)
 	}
 
-	return spell, nil
+	return spellOption, nil
 }
 
 // AnalyzePartyMemberStatus analyzes a party member's status effects and recommends actions
@@ -327,11 +292,12 @@ func (ns *NaSpellSelector) AnalyzePartyMemberStatus(member *entity.Entity, avail
 		}
 
 		// Check if we can afford this spell and haven't already recommended it
-		if spell, exists := ns.naSpellMap[effect.NaSpell]; exists {
-			if spell.MPCost <= availableMP && !processedSpells[effect.NaSpell] {
+		if option, exists := ns.naSpellMap[effect.NaSpell]; exists {
+			mpCost := int(option.Spell.MPCost)
+			if mpCost <= availableMP && !processedSpells[effect.NaSpell] {
 				recommendedSpells = append(recommendedSpells, effect.NaSpell)
 				processedSpells[effect.NaSpell] = true
-				availableMP -= spell.MPCost // Deduct MP for next calculations
+				availableMP -= mpCost // Deduct MP for next calculations
 			}
 		}
 	}

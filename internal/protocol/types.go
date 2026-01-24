@@ -16,8 +16,8 @@ const (
 	TypeChatLine       MessageType = 20 // Ashita -> Go (parsed chat)
 	TypeStatusUpdate   MessageType = 21 // Ashita -> Go (party status)
 	TypeErrorReport    MessageType = 30 // Ashita -> Go (command execution errors)
-	TypeSpellComplete  MessageType = 31 // Ashita -> Go (spell completion notification)
-	TypeSpellFailed    MessageType = 32 // Ashita -> Go (spell failure notification)
+	TypeActionComplete MessageType = 31 // Ashita -> Go (action completion notification)
+	TypeActionFailed   MessageType = 32 // Ashita -> Go (action failure notification)
 	TypeReadyToCast    MessageType = 40 // Go -> Ashita (check if ready)
 	TypeReadyResponse  MessageType = 41 // Ashita -> Go (ready status)
 	TypeReadyForAction MessageType = 42 // Ashita -> Go (client is ready for next action)
@@ -63,14 +63,16 @@ type ChatLine struct {
 
 // StatusUpdate represents party status information from client to server
 type StatusUpdate struct {
-	Timestamp     int64          `json:"timestamp"`
-	PartyMembers  []PartyMember  `json:"party_members"`
-	PlayerMP      int            `json:"player_mp"`
-	PlayerHP      int            `json:"player_hp"`
-	PlayerStatus  []int          `json:"player_status"` // Player's own status effects
-	EchoDropCount int            `json:"echo_drop_count"`
-	Zone          string         `json:"zone"`
-	JobLevels     map[string]int `json:"job_levels"` // Job name -> level mapping
+	Timestamp      int64          `json:"timestamp"`
+	PartyMembers   []PartyMember  `json:"party_members"`
+	PlayerMP       int            `json:"player_mp"`
+	PlayerHP       int            `json:"player_hp"`
+	PlayerStatus   []int          `json:"player_status"` // Player's own status effects
+	EchoDropCount  int            `json:"echo_drop_count"`
+	Zone           string         `json:"zone"`
+	JobLevels      map[string]int `json:"job_levels"` // Job name -> level mapping
+	KnownSpells    []string       `json:"known_spells"`
+	KnownAbilities []string       `json:"known_abilities"`
 }
 
 // PartyMember represents a single party member's status
@@ -95,14 +97,14 @@ type ErrorReport struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-// SpellComplete represents spell completion notification from client to server
-type SpellComplete struct {
+// ActionComplete represents action completion notification from client to server
+type ActionComplete struct {
 	CommandID string `json:"command_id"`
 	Timestamp int64  `json:"timestamp"`
 }
 
-// SpellFailed represents spell failure notification from client to server
-type SpellFailed struct {
+// ActionFailed represents action failure notification from client to server
+type ActionFailed struct {
 	CommandID string `json:"command_id"`
 	Error     string `json:"error"`
 	Timestamp int64  `json:"timestamp"`
@@ -134,10 +136,10 @@ func ValidateMessage(msg *Message) error {
 		return nil // Body is ReadyResponse struct
 	case TypeErrorReport:
 		return ValidateErrorReport(msg.Body)
-	case TypeSpellComplete:
-		return ValidateSpellComplete(msg.Body)
-	case TypeSpellFailed:
-		return ValidateSpellFailed(msg.Body)
+	case TypeActionComplete:
+		return ValidateActionComplete(msg.Body)
+	case TypeActionFailed:
+		return ValidateActionFailed(msg.Body)
 	default:
 		return fmt.Errorf("unknown message type: %d", msg.Type)
 	}
@@ -258,11 +260,11 @@ func ValidateErrorReport(body any) error {
 	return nil
 }
 
-// ValidateSpellComplete validates a SpellComplete message body
-func ValidateSpellComplete(body any) error {
-	complete, ok := body.(*SpellComplete)
+// ValidateActionComplete validates an ActionComplete message body
+func ValidateActionComplete(body any) error {
+	complete, ok := body.(*ActionComplete)
 	if !ok {
-		return fmt.Errorf("invalid SpellComplete body type")
+		return fmt.Errorf("invalid ActionComplete body type")
 	}
 
 	if complete.CommandID == "" {
@@ -276,11 +278,11 @@ func ValidateSpellComplete(body any) error {
 	return nil
 }
 
-// ValidateSpellFailed validates a SpellFailed message body
-func ValidateSpellFailed(body any) error {
-	failed, ok := body.(*SpellFailed)
+// ValidateActionFailed validates an ActionFailed message body
+func ValidateActionFailed(body any) error {
+	failed, ok := body.(*ActionFailed)
 	if !ok {
-		return fmt.Errorf("invalid SpellFailed body type")
+		return fmt.Errorf("invalid ActionFailed body type")
 	}
 
 	if failed.CommandID == "" {
@@ -403,14 +405,16 @@ type partyMemberRaw struct {
 
 // statusUpdateRaw is used for unmarshaling JSON with raw party member data
 type statusUpdateRaw struct {
-	Timestamp     int64            `json:"timestamp"`
-	PartyMembers  []partyMemberRaw `json:"party_members"`
-	PlayerMP      int              `json:"player_mp"`
-	PlayerHP      int              `json:"player_hp"`
-	PlayerStatus  []int            `json:"player_status"`
-	EchoDropCount int              `json:"echo_drop_count"`
-	JobLevels     map[string]int   `json:"job_levels"`
-	Zone          int              `json:"zone"` // Zone ID from client - TODO: convert to zone name
+	Timestamp      int64            `json:"timestamp"`
+	PartyMembers   []partyMemberRaw `json:"party_members"`
+	PlayerMP       int              `json:"player_mp"`
+	PlayerHP       int              `json:"player_hp"`
+	PlayerStatus   []int            `json:"player_status"`
+	EchoDropCount  int              `json:"echo_drop_count"`
+	JobLevels      map[string]int   `json:"job_levels"`
+	KnownSpells    []string         `json:"known_spells"`
+	KnownAbilities []string         `json:"known_abilities"`
+	Zone           int              `json:"zone"` // Zone ID from client - TODO: convert to zone name
 }
 
 // UnmarshalStatusUpdate deserializes a StatusUpdate from JSON
@@ -423,13 +427,15 @@ func UnmarshalStatusUpdate(data []byte) (*StatusUpdate, error) {
 
 	// Convert raw status to proper StatusUpdate with job name conversion
 	status := &StatusUpdate{
-		Timestamp:     rawStatus.Timestamp,
-		PlayerMP:      rawStatus.PlayerMP,
-		PlayerHP:      rawStatus.PlayerHP,
-		PlayerStatus:  rawStatus.PlayerStatus,
-		EchoDropCount: rawStatus.EchoDropCount,
-		JobLevels:     rawStatus.JobLevels,
-		Zone:          fmt.Sprintf("Zone_%d", rawStatus.Zone), // TODO: convert zone ID to zone name
+		Timestamp:      rawStatus.Timestamp,
+		PlayerMP:       rawStatus.PlayerMP,
+		PlayerHP:       rawStatus.PlayerHP,
+		PlayerStatus:   rawStatus.PlayerStatus,
+		EchoDropCount:  rawStatus.EchoDropCount,
+		JobLevels:      rawStatus.JobLevels,
+		KnownSpells:    rawStatus.KnownSpells,
+		KnownAbilities: rawStatus.KnownAbilities,
+		Zone:           fmt.Sprintf("Zone_%d", rawStatus.Zone), // TODO: convert zone ID to zone name
 	}
 
 	// Convert party members with job ID to job name conversion

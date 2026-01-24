@@ -109,6 +109,7 @@ func getDefaultStatusEffects() map[int]StatusEffectInfo {
 		33:  {ID: 33, Name: "Haste", Severity: 1, SpellID: "Haste"},
 		40:  {ID: 40, Name: "Protect", Severity: 1, SpellID: "Protect"},
 		41:  {ID: 41, Name: "Shell", Severity: 1, SpellID: "Shell"},
+		42:  {ID: 42, Name: "Regen", Severity: 1, SpellID: "Regen"},
 		100: {ID: 100, Name: "Barfire", Severity: 1, SpellID: "Barfira"},
 		101: {ID: 101, Name: "Barblizzard", Severity: 1, SpellID: "Barblizzara"},
 		102: {ID: 102, Name: "Baraero", Severity: 1, SpellID: "Baraera"},

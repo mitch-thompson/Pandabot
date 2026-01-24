@@ -11,11 +11,8 @@ import (
 )
 
 func main() {
-	// Create server configuration
 	config := server.DefaultConfig()
 	config.Port = 31337
-
-	// Create and start the server
 	srv := server.NewServer(config)
 
 	go func() {
@@ -24,11 +21,8 @@ func main() {
 			log.Fatalf("Failed to start server: %v", err)
 		}
 	}()
-
-	// Create and start the GUI
 	g := gui.NewGUI(srv)
 
-	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
