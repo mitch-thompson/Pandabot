@@ -1,5 +1,7 @@
 #include <windows.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <stdlib.h>
 
 // Forward declarations for Go functions
 extern void GoInit();
@@ -63,7 +65,7 @@ void Release(IPlugin* plugin) {
 
 const char* GetName(void) { return "PandaBotMVP"; }
 const char* GetAuthor(void) { return "Mitchell"; }
-double GetVersion(void) { return 0.1; }
+double PluginGetVersion(void) { return 0.1; }
 const char* GetDescription(void) { return "MVP DLL - Connect only"; }
 const char* GetLink(void) { return ""; }
 int32_t GetPriority(void) { return 0; }
@@ -75,13 +77,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 }
 
 // CreatePlugin
-extern "C" __declspec(dllexport) IPlugin* __stdcall CreatePlugin(const char* args) {
+__declspec(dllexport) IPlugin* __stdcall CreatePlugin(const char* args) {
     if (gPlugin == NULL) {
         gPlugin = (IPlugin*)malloc(sizeof(IPlugin));
         gPlugin->vtable = &gVTable;
         gVTable.GetName = GetName;
         gVTable.GetAuthor = GetAuthor;
-        gVTable.GetVersion = GetVersion;
+        gVTable.GetVersion = PluginGetVersion;
         gVTable.GetDescription = GetDescription;
         gVTable.GetLink = GetLink;
         gVTable.GetPriority = GetPriority;

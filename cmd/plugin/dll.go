@@ -1,4 +1,4 @@
-package main // Match directory name
+package main
 
 import "C"
 
