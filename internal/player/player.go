@@ -19,10 +19,31 @@ type Player struct {
 }
 
 func (p *Player) CanCast(spellName string) bool {
+	if p.AvailableSpells == nil {
+		return false
+	}
 	s, ok := p.AvailableSpells[spellName]
 	if !ok {
 		return false
 	}
+	if p.SpellRecast == nil {
+		return true
+	}
 	ready, exists := p.SpellRecast[s.ID]
-	return !exists || time.Now().After(ready)
+	if !exists {
+		return true
+	}
+	isReady := time.Now().After(ready)
+	if !isReady {
+		// log.Printf("[DEBUG] CanCast(%s) ID:%d - NOT READY until %v (now: %v)", spellName, s.ID, ready, time.Now())
+	}
+	return isReady
+}
+
+func (p *Player) SetSpellRecast(spellID uint16, readyAt time.Time) {
+	if p.SpellRecast == nil {
+		p.SpellRecast = make(map[uint16]time.Time)
+	}
+	p.SpellRecast[spellID] = readyAt
+	// log.Printf("[DEBUG] SetSpellRecast ID:%d -> %v", spellID, readyAt)
 }

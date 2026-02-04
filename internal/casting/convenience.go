@@ -294,7 +294,7 @@ func (ch *CastingHelper) CastPartyCures(partyMembers []*entity.Entity, casterMP 
 		}
 
 		selector := cureSelector.NewCureSelector()
-		useCuraga, curagaOption, err := selector.ShouldUseCuraga(injured, availableMP, jobLevels)
+		useCuraga, curagaOption, err := selector.ShouldUseCuraga(injured, availableMP, jobLevels, ch.engine.Player)
 		if err == nil && useCuraga && curagaOption != nil {
 			// Cast curaga on the caster (self-target spell)
 			casterName := ch.getCasterName()

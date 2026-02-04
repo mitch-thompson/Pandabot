@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"PandaBot/internal/action"
+	"PandaBot/internal/player"
 	"PandaBot/internal/registry"
 	"PandaBot/internal/spell"
 )
@@ -77,12 +78,12 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 }
 
 // SelectOptimalProtect selects the best Protect spell based on job levels and party size
-func (bs *BuffSelector) SelectOptimalProtect(jobLevels map[string]int, availableMP int, partySize int) (*BuffOption, error) {
-	return bs.selectOptimalProtectInternal(jobLevels, availableMP, partySize, false)
+func (bs *BuffSelector) SelectOptimalProtect(jobLevels map[string]int, availableMP int, partySize int, p *player.Player) (*BuffOption, error) {
+	return bs.selectOptimalProtectInternal(jobLevels, availableMP, partySize, false, p)
 }
 
 // selectOptimalProtectInternal is the internal implementation with fallback control
-func (bs *BuffSelector) selectOptimalProtectInternal(jobLevels map[string]int, availableMP int, partySize int, fallbackAttempt bool) (*BuffOption, error) {
+func (bs *BuffSelector) selectOptimalProtectInternal(jobLevels map[string]int, availableMP int, partySize int, fallbackAttempt bool, p *player.Player) (*BuffOption, error) {
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
 
@@ -93,6 +94,11 @@ func (bs *BuffSelector) selectOptimalProtectInternal(jobLevels map[string]int, a
 	bestLevel := 0
 
 	for _, spellObj := range bs.protectSpells {
+		// Check recast
+		if p != nil && !p.CanCast(spellObj.English) {
+			continue
+		}
+
 		// Check MP requirement
 		if int(spellObj.MPCost) > availableMP {
 			continue
@@ -140,7 +146,7 @@ func (bs *BuffSelector) selectOptimalProtectInternal(jobLevels map[string]int, a
 
 	// If no area spell found but we prefer area, try single target (but only once)
 	if bestOption == nil && preferArea && !fallbackAttempt {
-		return bs.selectOptimalProtectInternal(jobLevels, availableMP, partySize, true)
+		return bs.selectOptimalProtectInternal(jobLevels, availableMP, partySize, true, p)
 	}
 
 	if bestOption == nil {
@@ -151,12 +157,12 @@ func (bs *BuffSelector) selectOptimalProtectInternal(jobLevels map[string]int, a
 }
 
 // SelectOptimalShell selects the best Shell spell based on job levels and party size
-func (bs *BuffSelector) SelectOptimalShell(jobLevels map[string]int, availableMP int, partySize int) (*BuffOption, error) {
-	return bs.selectOptimalShellInternal(jobLevels, availableMP, partySize, false)
+func (bs *BuffSelector) SelectOptimalShell(jobLevels map[string]int, availableMP int, partySize int, p *player.Player) (*BuffOption, error) {
+	return bs.selectOptimalShellInternal(jobLevels, availableMP, partySize, false, p)
 }
 
 // selectOptimalShellInternal is the internal implementation with fallback control
-func (bs *BuffSelector) selectOptimalShellInternal(jobLevels map[string]int, availableMP int, partySize int, fallbackAttempt bool) (*BuffOption, error) {
+func (bs *BuffSelector) selectOptimalShellInternal(jobLevels map[string]int, availableMP int, partySize int, fallbackAttempt bool, p *player.Player) (*BuffOption, error) {
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
 
@@ -168,6 +174,11 @@ func (bs *BuffSelector) selectOptimalShellInternal(jobLevels map[string]int, ava
 	bestLevel := 0
 
 	for _, spellObj := range bs.shellSpells {
+		// Check recast
+		if p != nil && !p.CanCast(spellObj.English) {
+			continue
+		}
+
 		// Check MP requirement
 		if int(spellObj.MPCost) > availableMP {
 			continue
@@ -215,7 +226,7 @@ func (bs *BuffSelector) selectOptimalShellInternal(jobLevels map[string]int, ava
 
 	// If no area spell found but we prefer area, try single target (but only once)
 	if bestOption == nil && preferArea && !fallbackAttempt {
-		return bs.selectOptimalShellInternal(jobLevels, availableMP, partySize, true)
+		return bs.selectOptimalShellInternal(jobLevels, availableMP, partySize, true, p)
 	}
 
 	if bestOption == nil {
@@ -226,7 +237,7 @@ func (bs *BuffSelector) selectOptimalShellInternal(jobLevels map[string]int, ava
 }
 
 // SelectBarSpell selects the appropriate Bar spell for elemental resistance
-func (bs *BuffSelector) SelectBarSpell(element string, jobLevels map[string]int, availableMP int) (*BuffOption, error) {
+func (bs *BuffSelector) SelectBarSpell(element string, jobLevels map[string]int, availableMP int, p *player.Player) (*BuffOption, error) {
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
 
@@ -248,6 +259,11 @@ func (bs *BuffSelector) SelectBarSpell(element string, jobLevels map[string]int,
 	spellObj, exists := bs.spellDatabase[spellName]
 	if !exists {
 		return nil, fmt.Errorf("spell %s not found", spellName)
+	}
+
+	// Check recast
+	if p != nil && !p.CanCast(spellObj.English) {
+		return nil, fmt.Errorf("%s is on recast", spellName)
 	}
 
 	// Check MP requirement
@@ -281,21 +297,21 @@ func (bs *BuffSelector) SelectBarSpell(element string, jobLevels map[string]int,
 }
 
 // GetOptimalBuffSequence returns the optimal sequence of buff spells for firebuffs, etc.
-func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[string]int, availableMP int, partySize int) ([]*BuffOption, error) {
+func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[string]int, availableMP int, partySize int, p *player.Player) ([]*BuffOption, error) {
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
 
 	var sequence []*BuffOption
 
 	// Get Protect spell
-	protectOption, err := bs.SelectOptimalProtect(jobLevels, availableMP, partySize)
+	protectOption, err := bs.SelectOptimalProtect(jobLevels, availableMP, partySize, p)
 	if err == nil && protectOption != nil {
 		sequence = append(sequence, protectOption)
 		availableMP -= protectOption.MPCost
 	}
 
 	// Get Shell spell
-	shellOption, err := bs.SelectOptimalShell(jobLevels, availableMP, partySize)
+	shellOption, err := bs.SelectOptimalShell(jobLevels, availableMP, partySize, p)
 	if err == nil && shellOption != nil {
 		sequence = append(sequence, shellOption)
 		availableMP -= shellOption.MPCost
@@ -312,7 +328,7 @@ func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[st
 	}
 
 	if element, exists := elementMap[buffType]; exists {
-		barOption, err := bs.SelectBarSpell(element, jobLevels, availableMP)
+		barOption, err := bs.SelectBarSpell(element, jobLevels, availableMP, p)
 		if err == nil && barOption != nil {
 			sequence = append(sequence, barOption)
 			availableMP -= barOption.MPCost
@@ -320,7 +336,7 @@ func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[st
 	}
 
 	// Add Reraise if available and not already in sequence
-	reraiseOption, err := bs.SelectOptimalReraise(jobLevels, availableMP)
+	reraiseOption, err := bs.SelectOptimalReraise(jobLevels, availableMP, p)
 	if err == nil && reraiseOption != nil {
 		sequence = append(sequence, reraiseOption)
 		availableMP -= reraiseOption.MPCost
@@ -330,14 +346,17 @@ func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[st
 	if level, exists := jobLevels["WHM"]; exists && level >= 50 {
 		auspiceSpell := bs.spellDatabase["Auspice"]
 		if auspiceSpell != nil && int(auspiceSpell.MPCost) <= availableMP {
-			sequence = append(sequence, &BuffOption{
-				SpellName:  auspiceSpell.English,
-				Spell:      auspiceSpell,
-				MPCost:     int(auspiceSpell.MPCost),
-				CastTime:   auspiceSpell.CastTime,
-				Efficiency: 1.0 / float64(auspiceSpell.MPCost),
-			})
-			availableMP -= int(auspiceSpell.MPCost)
+			// Check recast for Auspice
+			if p == nil || p.CanCast("Auspice") {
+				sequence = append(sequence, &BuffOption{
+					SpellName:  auspiceSpell.English,
+					Spell:      auspiceSpell,
+					MPCost:     int(auspiceSpell.MPCost),
+					CastTime:   auspiceSpell.CastTime,
+					Efficiency: 1.0 / float64(auspiceSpell.MPCost),
+				})
+				availableMP -= int(auspiceSpell.MPCost)
+			}
 		}
 	}
 
@@ -349,7 +368,7 @@ func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[st
 }
 
 // SelectOptimalReraise selects the highest Reraise spell available
-func (bs *BuffSelector) SelectOptimalReraise(jobLevels map[string]int, availableMP int) (*BuffOption, error) {
+func (bs *BuffSelector) SelectOptimalReraise(jobLevels map[string]int, availableMP int, p *player.Player) (*BuffOption, error) {
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
 
@@ -358,6 +377,11 @@ func (bs *BuffSelector) SelectOptimalReraise(jobLevels map[string]int, available
 
 	for _, spellObj := range bs.spellDatabase {
 		if !strings.HasPrefix(spellObj.English, "Reraise") {
+			continue
+		}
+
+		// Check recast
+		if p != nil && !p.CanCast(spellObj.English) {
 			continue
 		}
 
@@ -398,7 +422,7 @@ func (bs *BuffSelector) SelectOptimalReraise(jobLevels map[string]int, available
 }
 
 // SelectOptimalRegen selects the highest Regen spell available
-func (bs *BuffSelector) SelectOptimalRegen(jobLevels map[string]int, availableMP int) (*BuffOption, error) {
+func (bs *BuffSelector) SelectOptimalRegen(jobLevels map[string]int, availableMP int, p *player.Player) (*BuffOption, error) {
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
 
@@ -406,6 +430,11 @@ func (bs *BuffSelector) SelectOptimalRegen(jobLevels map[string]int, availableMP
 	bestPriority := -1
 
 	for _, spellObj := range bs.regenSpells {
+		// Check recast
+		if p != nil && !p.CanCast(spellObj.English) {
+			continue
+		}
+
 		// Check MP requirement
 		if int(spellObj.MPCost) > availableMP {
 			continue

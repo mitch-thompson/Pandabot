@@ -12,6 +12,7 @@ import (
 	"PandaBot/internal/cureSelector"
 	"PandaBot/internal/entity"
 	"PandaBot/internal/naSelector"
+	"PandaBot/internal/player"
 	"PandaBot/internal/registry"
 )
 
@@ -31,6 +32,9 @@ type CastingEngine struct {
 
 	// Client management
 	clientManager *ClientManager
+
+	// Player state
+	Player *player.Player
 }
 
 // CastingConfig holds configuration for the casting engine
@@ -75,6 +79,7 @@ const (
 
 // CastContext provides context for spell selection and casting
 type CastContext struct {
+	Player          *player.Player
 	CasterMP        int
 	CasterJobLevels map[string]int
 	CasterName      string // Name of the caster (for self-targeting spells)
@@ -168,6 +173,11 @@ func DefaultCastingConfig() *CastingConfig {
 
 // RequestCast submits a new casting request
 func (ce *CastingEngine) RequestCast(request *CastRequest) error {
+	// Initialize context player if missing
+	if request.Context != nil && request.Context.Player == nil {
+		request.Context.Player = ce.Player
+	}
+
 	ce.mu.Lock()
 
 	// If priority 10, cancel all other casts (Requirement 10.4)
@@ -389,7 +399,7 @@ func (ce *CastingEngine) resolveActionSelection(activeCast *ActiveCast) error {
 
 	case CastTypeReraise:
 		// Select optimal Reraise action
-		reraiseOption, err := ce.buffSelector.SelectOptimalReraise(context.CasterJobLevels, context.CasterMP)
+		reraiseOption, err := ce.buffSelector.SelectOptimalReraise(context.CasterJobLevels, context.CasterMP, context.Player)
 		if err != nil {
 			return fmt.Errorf("reraise selection failed: %v", err)
 		}
@@ -401,7 +411,7 @@ func (ce *CastingEngine) resolveActionSelection(activeCast *ActiveCast) error {
 
 	case CastTypeRegen:
 		// Select optimal Regen action
-		regenOption, err := ce.buffSelector.SelectOptimalRegen(context.CasterJobLevels, context.CasterMP)
+		regenOption, err := ce.buffSelector.SelectOptimalRegen(context.CasterJobLevels, context.CasterMP, context.Player)
 		if err != nil {
 			return fmt.Errorf("regen selection failed: %v", err)
 		}
@@ -426,10 +436,20 @@ func (ce *CastingEngine) resolveActionSelection(activeCast *ActiveCast) error {
 			}
 		}
 
-		reraiseOption, err := ce.buffSelector.SelectOptimalReraise(context.CasterJobLevels, context.CasterMP)
+		reraiseOption, err := ce.buffSelector.SelectOptimalReraise(context.CasterJobLevels, context.CasterMP, context.Player)
 		if err == nil {
 			if s, err := registry.GetSpell(reraiseOption.SpellName); err == nil {
 				whmSequence = append(whmSequence, s)
+			}
+		}
+
+		// Add Auspice if WHM 50+
+		if level, exists := context.CasterJobLevels["WHM"]; exists && level >= 50 {
+			if s, err := registry.GetSpell("Auspice"); err == nil {
+				// Check recast for Auspice
+				if context.Player == nil || context.Player.CanCast("Auspice") {
+					whmSequence = append(whmSequence, s)
+				}
 			}
 		}
 
@@ -489,6 +509,7 @@ func (ce *CastingEngine) selectOptimalCure(context *CastContext) (*cureSelector.
 			availableMP,
 			context.CasterJobLevels,
 			prioritizeEfficiency,
+			context.Player,
 		)
 
 		if err != nil {
@@ -502,6 +523,7 @@ func (ce *CastingEngine) selectOptimalCure(context *CastContext) (*cureSelector.
 			context.MissingHP,
 			availableMP,
 			context.CasterJobLevels,
+			context.Player,
 		)
 
 		if err != nil {
@@ -525,6 +547,7 @@ func (ce *CastingEngine) selectOptimalBuffs(context *CastContext) ([]action.Acti
 		context.CasterJobLevels,
 		availableMP,
 		context.PartySize,
+		context.Player,
 	)
 	if err != nil {
 		return nil, err
@@ -554,6 +577,7 @@ func (ce *CastingEngine) selectOptimalProtect(context *CastContext) (*buffSelect
 		context.CasterJobLevels,
 		availableMP,
 		context.PartySize,
+		context.Player,
 	)
 }
 
@@ -568,6 +592,7 @@ func (ce *CastingEngine) selectOptimalShell(context *CastContext) (*buffSelector
 		context.CasterJobLevels,
 		availableMP,
 		context.PartySize,
+		context.Player,
 	)
 }
 
@@ -681,6 +706,7 @@ func (ce *CastingEngine) selectOptimalNaSpell(context *CastContext) (action.Acti
 	naOption, err := ce.naSelector.SelectOptimalNaSpell(
 		context.StatusEffects,
 		availableMP,
+		context.Player,
 	)
 	if err != nil {
 		return nil, err
@@ -819,6 +845,19 @@ func (ce *CastingEngine) completeCast(activeCast *ActiveCast) {
 
 	// Remove from active casts
 	delete(ce.activeCasts, activeCast.Request.ID)
+
+	// Set recast timer if the action was a spell and it was successful
+	if activeCast.State == CastStateCompleted && activeCast.Request.Action != nil {
+		if activeCast.Request.Action.GetActionType() == action.ActionTypeSpell {
+			// Try to get as Spell if possible (or look up in registry)
+			s, err := registry.GetSpell(activeCast.Request.Action.GetName())
+			if err == nil && s.Recast > 0 && activeCast.Request.Context.Player != nil {
+				recastDuration := time.Duration(s.Recast * float32(time.Second))
+				readyAt := time.Now().Add(recastDuration)
+				activeCast.Request.Context.Player.SetSpellRecast(s.ID, readyAt)
+			}
+		}
+	}
 
 	// Log queue state after removal
 	//ce.logQueueState("CAST_REMOVED", activeCast.Request.ID)
@@ -1081,23 +1120,23 @@ func (ce *CastingEngine) SelectOptimalShell(context *CastContext) (*buffSelector
 	return ce.selectOptimalShell(context)
 }
 
-func (ce *CastingEngine) SelectOptimalReraise(jobLevels map[string]int, availableMP int) (*buffSelector.BuffOption, error) {
+func (ce *CastingEngine) SelectOptimalReraise(jobLevels map[string]int, availableMP int, p *player.Player) (*buffSelector.BuffOption, error) {
 	availableMP = availableMP - ce.config.MPReservation
 	if availableMP <= 0 {
 		return nil, fmt.Errorf("insufficient MP for Reraise")
 	}
 
-	return ce.buffSelector.SelectOptimalReraise(jobLevels, availableMP)
+	return ce.buffSelector.SelectOptimalReraise(jobLevels, availableMP, p)
 }
 
 // SelectOptimalRegen selects the highest Regen spell available
-func (ce *CastingEngine) SelectOptimalRegen(jobLevels map[string]int, availableMP int) (*buffSelector.BuffOption, error) {
+func (ce *CastingEngine) SelectOptimalRegen(jobLevels map[string]int, availableMP int, p *player.Player) (*buffSelector.BuffOption, error) {
 	availableMP = availableMP - ce.config.MPReservation
 	if availableMP <= 0 {
 		return nil, fmt.Errorf("insufficient MP for Regen")
 	}
 
-	return ce.buffSelector.SelectOptimalRegen(jobLevels, availableMP)
+	return ce.buffSelector.SelectOptimalRegen(jobLevels, availableMP, p)
 }
 
 func (ce *CastingEngine) GetStats() map[string]interface{} {

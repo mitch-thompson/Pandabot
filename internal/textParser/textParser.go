@@ -55,6 +55,7 @@ func (tp *TextParser) initializeDefaultTriggers() {
 	tp.triggerMap["cursed"] = 8
 	tp.triggerMap["doom"] = 10
 	tp.triggerMap["viruna"] = 7
+	tp.triggerMap["devotion"] = 7
 	tp.triggerMap["diseased"] = 7
 	tp.triggerMap["plagued"] = 7
 

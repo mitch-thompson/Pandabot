@@ -12,6 +12,7 @@ The selection of a cure spell level follows these primary steps:
         *   **Caster Level Determination**: The system maintains a mapping of all the caster's job levels (e.g., `{"WHM": 75, "BLM": 37}`). When evaluating a spell, it checks if any of the caster's jobs meet or exceed the required level for that specific spell in the registry. This allows the bot to seamlessly use spells available from both the main job and subjob.
         *   **Data Source**: This information is retrieved in real-time from the game client's state. When the bot receives a status update, it extracts the current job and level, updates its internal mapping, and passes this via the `ClientInterface` to the selector within a `CastContext`.
     *   **Spell Type**: Only spells categorized as `Healing` (with "Cure" or "Curaga" prefix) or specific `BlueMagic` healing spells (`Wild Carrot`, `Magic Fruit`, `Healing Breeze`) are evaluated.
+    *   **Recast Timers**: Spells currently on recast are not considered. The system tracks recast timers internally (based on base values) and synchronizes with real-time data from the game client via status updates.
 
 2.  **Selection Modes**:
     Depending on the situation, the system uses different evaluation algorithms:
@@ -64,18 +65,18 @@ Some logic uses hardcoded values for safety and stability:
 
 #### Summary of Cure Levels
 
-| Spell | HP Restored | Base MP Cost |
-| :--- | :--- | :--- |
-| Cure | 30 | 8 |
-| Cure II | 100 | 24 |
-| Cure III | 250 | 46 |
-| Cure IV | 480 | 88 |
-| Cure V | 780 | 135 |
-| Cure VI | 900 | 180 |
-| Curaga | 90 | 60 |
-| Curaga II | 300 | 120 |
-| Curaga III | 550 | 180 |
-| Curaga IV | 800 | 260 |
-| Curaga V | 1100 | 380 |
+| Spell | HP Restored | Base MP Cost | Base Recast |
+| :--- | :--- | :--- | :--- |
+| Cure | 30 | 8 | 2.0s |
+| Cure II | 100 | 24 | 2.5s |
+| Cure III | 250 | 46 | 3.0s |
+| Cure IV | 480 | 88 | 3.5s |
+| Cure V | 780 | 135 | 4.0s |
+| Cure VI | 900 | 180 | 4.5s |
+| Curaga | 90 | 60 | 4.5s |
+| Curaga II | 300 | 120 | 5.25s |
+| Curaga III | 550 | 180 | 6.0s |
+| Curaga IV | 800 | 260 | 6.75s |
+| Curaga V | 1100 | 380 | 7.5s |
 
 *Note: HP Restored values are base values from the registry and may be modified by gear or job traits in the future.*

@@ -107,6 +107,14 @@ func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender strin
 		}
 		requestIDs = append(requestIDs, requestID)
 
+	case triggerType == "devotion":
+		requestID, err := tp.processAbilityTrigger("Devotion", sender, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process devotion trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
 	case triggerType == "viruna" || triggerType == "diseased" || triggerType == "plagued":
 		requestID, err := tp.processNaTrigger("Viruna", sender, priority, context, getUniqueNano(seq))
 		seq++
@@ -324,6 +332,45 @@ func (tp *TriggerProcessor) processNaTrigger(spellName string, target string, pr
 	err = tp.engine.RequestCast(request)
 	if err != nil {
 		return "", fmt.Errorf("failed to request na spell cast: %v", err)
+	}
+
+	return requestID, nil
+}
+
+// processAbilityTrigger processes a job ability trigger
+func (tp *TriggerProcessor) processAbilityTrigger(abilityName string, target string, priority int, context *CastContext, timestamp int64) (string, error) {
+	// Find the target entity
+	var targetEntity *entity.Entity
+	for _, member := range context.PartyMembers {
+		if member.Name == target {
+			targetEntity = member
+			break
+		}
+	}
+
+	if targetEntity != nil {
+		context.TargetEntity = targetEntity
+	}
+
+	// Create casting request for ability
+	requestID := fmt.Sprintf("ja_%d", timestamp)
+	a, err := registry.GetAbility(abilityName)
+	if err != nil {
+		return "", err
+	}
+
+	request := &CastRequest{
+		ID:       requestID,
+		Type:     CastTypeManual,
+		Action:   a,
+		Target:   target,
+		Priority: priority,
+		Context:  context,
+	}
+
+	err = tp.engine.RequestCast(request)
+	if err != nil {
+		return "", fmt.Errorf("failed to request ability cast: %v", err)
 	}
 
 	return requestID, nil

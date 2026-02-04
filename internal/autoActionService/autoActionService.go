@@ -184,7 +184,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 			// Resolve spell to check its targeting
 			spellName := buff.SpellName
 			if spellName == "reraise" {
-				if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalReraise(clientInfo.JobLevels, clientInfo.MP); err == nil {
+				if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalReraise(clientInfo.JobLevels, clientInfo.MP, aas.castingSystem.GetCastingEngine().Player); err == nil {
 					spellName = opt.SpellName
 				}
 			} else if spellName == "protect" {
@@ -258,7 +258,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 
 		// Handle spell resolution for generic names like "reraise", "protect", etc.
 		if spellName == "reraise" {
-			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalReraise(clientInfo.JobLevels, clientInfo.MP); err == nil {
+			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalReraise(clientInfo.JobLevels, clientInfo.MP, aas.castingSystem.GetCastingEngine().Player); err == nil {
 				spellName = opt.SpellName
 			}
 		} else if spellName == "protect" {

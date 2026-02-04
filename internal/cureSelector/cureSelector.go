@@ -3,6 +3,7 @@ package cureSelector
 import (
 	"PandaBot/internal/config"
 	"PandaBot/internal/entity"
+	"PandaBot/internal/player"
 	"PandaBot/internal/registry"
 	"PandaBot/internal/spell"
 	"fmt"
@@ -34,7 +35,7 @@ func NewCureSelector() *CureSelector {
 }
 
 // SelectOptimalCure determines the best cure spell for a given situation using urgency-weighted HP/MP efficiency
-func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int, prioritizeEfficiency bool) (*CureOption, error) {
+func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int, prioritizeEfficiency bool, p *player.Player) (*CureOption, error) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -55,10 +56,10 @@ func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []
 	targetUrgency := float64(missingHP) / float64(maxHP)
 
 	// Get available single-target cure options
-	availableCureOptions := cs.getAvailableCureOptions(availableMP, jobLevel)
+	availableCureOptions := cs.getAvailableCureOptions(availableMP, jobLevel, p)
 
 	// Get available Curaga options
-	availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel)
+	availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel, p)
 
 	var bestOption *CureOption
 	maxWeightedEfficiency := -1.0
@@ -121,7 +122,7 @@ func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []
 }
 
 // SelectCureByDamage selects cure spell based on missing HP amount
-func (cs *CureSelector) SelectCureByDamage(missingHP int, availableMP int, jobLevel map[string]int) (*CureOption, error) {
+func (cs *CureSelector) SelectCureByDamage(missingHP int, availableMP int, jobLevel map[string]int, p *player.Player) (*CureOption, error) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -129,7 +130,7 @@ func (cs *CureSelector) SelectCureByDamage(missingHP int, availableMP int, jobLe
 		return nil, fmt.Errorf("no healing needed")
 	}
 
-	availableOptions := cs.getAvailableCureOptions(availableMP, jobLevel)
+	availableOptions := cs.getAvailableCureOptions(availableMP, jobLevel, p)
 
 	if len(availableOptions) == 0 {
 		return nil, fmt.Errorf("no cure spells available")
@@ -201,15 +202,15 @@ func (cs *CureSelector) GetCureSpellInfo(spellName string) (*spell.Spell, error)
 }
 
 // GetAllCureOptions returns all available cure options for given constraints
-func (cs *CureSelector) GetAllCureOptions(availableMP int, jobLevel map[string]int) ([]*CureOption, error) {
+func (cs *CureSelector) GetAllCureOptions(availableMP int, jobLevel map[string]int, p *player.Player) ([]*CureOption, error) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
-	return cs.getAvailableCureOptions(availableMP, jobLevel), nil
+	return cs.getAvailableCureOptions(availableMP, jobLevel, p), nil
 }
 
 // SelectCuragaForMultipleTargets selects appropriate curaga spell when more than 3 party members need healing
-func (cs *CureSelector) SelectCuragaForMultipleTargets(partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int) (*CureOption, error) {
+func (cs *CureSelector) SelectCuragaForMultipleTargets(partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int, p *player.Player) (*CureOption, error) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -233,7 +234,7 @@ func (cs *CureSelector) SelectCuragaForMultipleTargets(partyMembers []*entity.En
 
 	averageMissingHP := totalMissingHP / membersNeedingHealing
 
-	availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel)
+	availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel, p)
 	if len(availableCuragaOptions) == 0 {
 		return nil, fmt.Errorf("no curaga spells available with current MP and job levels")
 	}
@@ -243,7 +244,7 @@ func (cs *CureSelector) SelectCuragaForMultipleTargets(partyMembers []*entity.En
 }
 
 // ShouldUseCuraga determines if curaga is more efficient than individual cures
-func (cs *CureSelector) ShouldUseCuraga(partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int) (bool, *CureOption, error) {
+func (cs *CureSelector) ShouldUseCuraga(partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int, p *player.Player) (bool, *CureOption, error) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -263,7 +264,7 @@ func (cs *CureSelector) ShouldUseCuraga(partyMembers []*entity.Entity, available
 	}
 
 	if membersNeedingHealing >= config.Get().CuragaThreshold {
-		availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel)
+		availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel, p)
 		if len(availableCuragaOptions) == 0 {
 			return false, nil, fmt.Errorf("no curaga spells available with current MP and job levels")
 		}
@@ -282,7 +283,7 @@ func (cs *CureSelector) ShouldUseCuraga(partyMembers []*entity.Entity, available
 			return false, nil, fmt.Errorf("no suitable curaga option found")
 		}
 
-		singleOptions := cs.getAvailableCureOptions(availableMP, jobLevel)
+		singleOptions := cs.getAvailableCureOptions(availableMP, jobLevel, p)
 		if len(singleOptions) == 0 {
 			// If we can't cast any single-target cures but can cast curaga, prefer curaga
 			return true, bestCuraga, nil
@@ -332,8 +333,9 @@ func (cs *CureSelector) calculateMissingHP(target *entity.Entity) int {
 	return 0
 }
 
-func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[string]int) []*CureOption {
+func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[string]int, p *player.Player) []*CureOption {
 	var options []*CureOption
+	// log.Printf("[DEBUG] Evaluating cure options for available MP: %d", availableMP)
 
 	allSpells := registry.GetAllSpells()
 	for _, s := range allSpells {
@@ -346,6 +348,11 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 		}
 
 		if s.Type == spell.BlueMagic && s.English != "Wild Carrot" && s.English != "Magic Fruit" {
+			continue
+		}
+
+		// Check recast
+		if p != nil && !p.CanCast(s.English) {
 			continue
 		}
 
@@ -384,7 +391,7 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 	return options
 }
 
-func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[string]int) []*CureOption {
+func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[string]int, p *player.Player) []*CureOption {
 	var options []*CureOption
 
 	allSpells := registry.GetAllSpells()
@@ -398,6 +405,11 @@ func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[
 		}
 
 		if s.Type == spell.BlueMagic && s.English != "Healing Breeze" {
+			continue
+		}
+
+		// Check recast
+		if p != nil && !p.CanCast(s.English) {
 			continue
 		}
 

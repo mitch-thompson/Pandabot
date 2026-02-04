@@ -19,8 +19,11 @@ import (
 	"PandaBot/internal/cureSelector"
 	"PandaBot/internal/job"
 	"PandaBot/internal/naSelector"
+	"PandaBot/internal/player"
 	"PandaBot/internal/prioritizer"
 	"PandaBot/internal/protocol"
+	"PandaBot/internal/registry"
+	"PandaBot/internal/spell"
 	"PandaBot/internal/statusMonitor"
 	"PandaBot/internal/textParser"
 	"PandaBot/internal/triggerService"
@@ -40,6 +43,7 @@ type Server struct {
 	naSelector    *naSelector.NaSpellSelector
 	buffSelector  *buffSelector.BuffSelector
 	statusMonitor *statusMonitor.StatusMonitor
+	Player        *player.Player
 
 	// Centralized casting system
 	castingSystem *casting.CastingServerIntegration
@@ -110,6 +114,11 @@ type Config struct {
 // NewServer creates a new PandaBot server
 func NewServer(config *Config) *Server {
 	castingSystem := casting.NewCastingServerIntegration()
+	p := &player.Player{
+		SpellRecast:   make(map[uint16]time.Time),
+		AbilityRecast: make(map[uint16]time.Time),
+	}
+	castingSystem.GetCastingEngine().Player = p
 
 	return &Server{
 		clients:           make(map[net.Conn]*Client),
@@ -119,6 +128,7 @@ func NewServer(config *Config) *Server {
 		naSelector:        naSelector.NewNaSpellSelector(),
 		buffSelector:      buffSelector.NewBuffSelector(),
 		statusMonitor:     statusMonitor.NewStatusMonitor(),
+		Player:            p,
 		castingSystem:     castingSystem,
 		triggerService:    triggerService.NewTriggerService(castingSystem),
 		autoActionService: autoActionService.NewAutoActionService(castingSystem),
@@ -155,6 +165,11 @@ func (s *Server) UpdateFromConfig() {
 		s.config.HealthThresholds.Low,
 		s.config.HealthThresholds.Medium,
 	)
+
+	// Ensure casting engine has player reference
+	if s.castingSystem != nil && s.castingSystem.GetCastingEngine() != nil {
+		s.castingSystem.GetCastingEngine().Player = s.Player
+	}
 }
 
 // Start starts the server
@@ -916,6 +931,11 @@ func (s *Server) isCommandStillNecessary(client *Client, cmd *QueuedCommand) boo
 
 // handleJSONStatusUpdate processes a JSON status update from the client
 func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interface{}) {
+	// log.Printf("[DEBUG] Received JSON status update")
+	/*
+		bodyJSON, _ := json.Marshal(body)
+		log.Printf("[DEBUG] JSON Status Body: %s", string(bodyJSON))
+	*/
 	// Parse player name and zone
 	playerName, ok := body["PlayerName"].(string)
 	if !ok {
@@ -1009,6 +1029,20 @@ func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interfac
 
 		// If this is the player, update additional info
 		if name == playerName {
+			// Update player object available spells
+			if spellsData, ok := body["KnownSpells"].([]interface{}); ok {
+				if s.Player.AvailableSpells == nil {
+					s.Player.AvailableSpells = make(map[string]*spell.Spell)
+				}
+				for _, sp := range spellsData {
+					if spellName, ok := sp.(string); ok {
+						if spellObj, err := registry.GetSpell(spellName); err == nil {
+							s.Player.AvailableSpells[spellName] = spellObj
+						}
+					}
+				}
+			}
+
 			// Update MP and job levels
 			jobName := getJobNameFromID(job)
 			// Placeholder level 75; update if levels available in protocol.
@@ -1021,6 +1055,32 @@ func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interfac
 				for _, s := range spells {
 					if name, ok := s.(string); ok {
 						knownSpells = append(knownSpells, name)
+					}
+				}
+			}
+
+			// Handle SpellRecasts if present
+			if recasts, ok := body["SpellRecasts"].(map[string]interface{}); ok {
+				for idStr, remainingStr := range recasts {
+					id, err := strconv.ParseUint(idStr, 10, 16)
+					if err != nil {
+						continue
+					}
+					// Lua might send this as a string or a number depending on how it's encoded
+					var remaining float64
+					switch v := remainingStr.(type) {
+					case string:
+						remaining, _ = strconv.ParseFloat(v, 64)
+					case float64:
+						remaining = v
+					}
+
+					if remaining > 0 {
+						readyAt := time.Now().Add(time.Duration(remaining * float64(time.Second)))
+						s.Player.SetSpellRecast(uint16(id), readyAt)
+						// log.Printf("[DEBUG] Recast update for spell %d: %v remaining (ready at %v)", id, remaining, readyAt)
+					} else {
+						s.Player.SetSpellRecast(uint16(id), time.Time{}) // Clear it
 					}
 				}
 			}

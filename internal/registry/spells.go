@@ -57,29 +57,29 @@ func GetAllSpells() []*spell.Spell {
 func initializeSpells() {
 	defaultSpells := []*spell.Spell{
 		// Healing
-		{English: "Cure", ID: 1, MPCost: 8, CastTime: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 1, HealAmount: 30, LevelReq: map[string]int{"WHM": 1, "RDM": 3, "PLD": 5, "SCH": 5}},
-		{English: "Cure II", ID: 2, MPCost: 24, CastTime: 2.5, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 2, HealAmount: 100, LevelReq: map[string]int{"WHM": 11, "RDM": 14, "PLD": 17, "SCH": 17}},
-		{English: "Cure III", ID: 3, MPCost: 46, CastTime: 3.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 3, HealAmount: 250, LevelReq: map[string]int{"WHM": 21, "RDM": 26, "PLD": 30, "SCH": 30}},
-		{English: "Cure IV", ID: 4, MPCost: 88, CastTime: 3.5, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 4, HealAmount: 480, LevelReq: map[string]int{"WHM": 41, "RDM": 48, "PLD": 55, "SCH": 55}},
-		{English: "Cure V", ID: 5, MPCost: 135, CastTime: 4.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 5, HealAmount: 780, LevelReq: map[string]int{"WHM": 61}},
-		{English: "Cure VI", ID: 6, MPCost: 180, CastTime: 4.5, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 6, HealAmount: 900, LevelReq: map[string]int{"WHM": 80}},
+		{English: "Cure", ID: 1, MPCost: 8, CastTime: 2.0, Recast: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 1, HealAmount: 30, LevelReq: map[string]int{"WHM": 1, "RDM": 3, "PLD": 5, "SCH": 5}},
+		{English: "Cure II", ID: 2, MPCost: 24, CastTime: 2.5, Recast: 2.5, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 2, HealAmount: 100, LevelReq: map[string]int{"WHM": 11, "RDM": 14, "PLD": 17, "SCH": 17}},
+		{English: "Cure III", ID: 3, MPCost: 46, CastTime: 3.0, Recast: 3.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 3, HealAmount: 250, LevelReq: map[string]int{"WHM": 21, "RDM": 26, "PLD": 30, "SCH": 30}},
+		{English: "Cure IV", ID: 4, MPCost: 88, CastTime: 3.5, Recast: 3.5, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 4, HealAmount: 480, LevelReq: map[string]int{"WHM": 41, "RDM": 48, "PLD": 55, "SCH": 55}},
+		{English: "Cure V", ID: 5, MPCost: 135, CastTime: 4.0, Recast: 4.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 5, HealAmount: 780, LevelReq: map[string]int{"WHM": 61}},
+		{English: "Cure VI", ID: 6, MPCost: 180, CastTime: 4.5, Recast: 4.5, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 6, HealAmount: 900, LevelReq: map[string]int{"WHM": 80}},
 
 		// Curaga
-		{English: "Curaga", ID: 7, MPCost: 60, CastTime: 3.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetSelf | action.TargetAoE, Priority: 7, HealAmount: 90, LevelReq: map[string]int{"WHM": 16}},
-		{English: "Curaga II", ID: 8, MPCost: 120, CastTime: 3.5, Type: spell.Healing, Element: spell.Light, Targets: action.TargetSelf | action.TargetAoE, Priority: 8, HealAmount: 300, LevelReq: map[string]int{"WHM": 31}},
-		{English: "Curaga III", ID: 9, MPCost: 180, CastTime: 4.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetSelf | action.TargetAoE, Priority: 9, HealAmount: 550, LevelReq: map[string]int{"WHM": 51}},
-		{English: "Curaga IV", ID: 10, MPCost: 260, CastTime: 4.5, Type: spell.Healing, Element: spell.Light, Targets: action.TargetSelf | action.TargetAoE, Priority: 10, HealAmount: 800, LevelReq: map[string]int{"WHM": 71}},
-		{English: "Curaga V", ID: 11, MPCost: 380, CastTime: 5.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetSelf | action.TargetAoE, Priority: 11, HealAmount: 1100, LevelReq: map[string]int{"WHM": 91}},
+		{English: "Curaga", ID: 7, MPCost: 60, CastTime: 3.0, Recast: 4.5, Type: spell.Healing, Element: spell.Light, Targets: action.TargetSelf | action.TargetAoE, Priority: 7, HealAmount: 90, LevelReq: map[string]int{"WHM": 16}},
+		{English: "Curaga II", ID: 8, MPCost: 120, CastTime: 3.5, Recast: 5.25, Type: spell.Healing, Element: spell.Light, Targets: action.TargetSelf | action.TargetAoE, Priority: 8, HealAmount: 300, LevelReq: map[string]int{"WHM": 31}},
+		{English: "Curaga III", ID: 9, MPCost: 180, CastTime: 4.0, Recast: 6.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetSelf | action.TargetAoE, Priority: 9, HealAmount: 550, LevelReq: map[string]int{"WHM": 51}},
+		{English: "Curaga IV", ID: 10, MPCost: 260, CastTime: 4.5, Recast: 6.75, Type: spell.Healing, Element: spell.Light, Targets: action.TargetSelf | action.TargetAoE, Priority: 10, HealAmount: 800, LevelReq: map[string]int{"WHM": 71}},
+		{English: "Curaga V", ID: 11, MPCost: 380, CastTime: 5.0, Recast: 7.5, Type: spell.Healing, Element: spell.Light, Targets: action.TargetSelf | action.TargetAoE, Priority: 11, HealAmount: 1100, LevelReq: map[string]int{"WHM": 91}},
 
 		// Status Removal
-		{English: "Poisona", ID: 14, MPCost: 8, CastTime: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 1, LevelReq: map[string]int{"WHM": 6}},
-		{English: "Paralyna", ID: 15, MPCost: 12, CastTime: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 2, LevelReq: map[string]int{"WHM": 9}},
-		{English: "Blindna", ID: 16, MPCost: 16, CastTime: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 1, LevelReq: map[string]int{"WHM": 14}},
-		{English: "Silena", ID: 17, MPCost: 24, CastTime: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 3, LevelReq: map[string]int{"WHM": 19}},
-		{English: "Cursna", ID: 18, MPCost: 30, CastTime: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 2, LevelReq: map[string]int{"WHM": 20}},
-		{English: "Viruna", ID: 19, MPCost: 36, CastTime: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 1, LevelReq: map[string]int{"WHM": 34}},
-		{English: "Stona", ID: 20, MPCost: 40, CastTime: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 4, LevelReq: map[string]int{"WHM": 39}},
-		{English: "Erase", ID: 21, MPCost: 32, CastTime: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 2, LevelReq: map[string]int{"WHM": 32}},
+		{English: "Poisona", ID: 14, MPCost: 8, CastTime: 2.0, Recast: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 1, LevelReq: map[string]int{"WHM": 6}},
+		{English: "Paralyna", ID: 15, MPCost: 12, CastTime: 2.0, Recast: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 2, LevelReq: map[string]int{"WHM": 9}},
+		{English: "Blindna", ID: 16, MPCost: 16, CastTime: 2.0, Recast: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 1, LevelReq: map[string]int{"WHM": 14}},
+		{English: "Silena", ID: 17, MPCost: 24, CastTime: 2.0, Recast: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 3, LevelReq: map[string]int{"WHM": 19}},
+		{English: "Cursna", ID: 18, MPCost: 30, CastTime: 2.0, Recast: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 2, LevelReq: map[string]int{"WHM": 20}},
+		{English: "Viruna", ID: 19, MPCost: 36, CastTime: 2.0, Recast: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 1, LevelReq: map[string]int{"WHM": 34}},
+		{English: "Stona", ID: 20, MPCost: 40, CastTime: 2.0, Recast: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 4, LevelReq: map[string]int{"WHM": 39}},
+		{English: "Erase", ID: 21, MPCost: 32, CastTime: 2.0, Recast: 2.0, Type: spell.Healing, Element: spell.Light, Targets: action.TargetAlly, Priority: 2, LevelReq: map[string]int{"WHM": 32}},
 
 		// Buffs
 		{English: "Protect", ID: 43, MPCost: 8, CastTime: 3.0, Type: spell.Enhancing, Element: spell.Light, Targets: action.TargetPartyMember, Priority: 1, LevelReq: map[string]int{"WHM": 7, "RDM": 7, "PLD": 10, "SCH": 10, "RUN": 20}},

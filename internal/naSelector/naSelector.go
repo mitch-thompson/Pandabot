@@ -2,6 +2,7 @@ package naSelector
 
 import (
 	"PandaBot/internal/entity"
+	"PandaBot/internal/player"
 	"PandaBot/internal/registry"
 	"PandaBot/internal/spell"
 	"PandaBot/internal/status"
@@ -146,7 +147,7 @@ func (ns *NaSpellSelector) PrioritizeStatusEffects(statusEffects []int) ([]int, 
 }
 
 // SelectOptimalNaSpell chooses the best "na" spell for given status effects and constraints
-func (ns *NaSpellSelector) SelectOptimalNaSpell(statusEffects []int, availableMP int) (*NaSpellOption, error) {
+func (ns *NaSpellSelector) SelectOptimalNaSpell(statusEffects []int, availableMP int, p *player.Player) (*NaSpellOption, error) {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
 
@@ -159,6 +160,11 @@ func (ns *NaSpellSelector) SelectOptimalNaSpell(statusEffects []int, availableMP
 	for _, option := range ns.naSpellMap {
 		if int(option.Spell.MPCost) > availableMP {
 			continue // Can't afford this spell
+		}
+
+		// Check recast
+		if p != nil && !p.CanCast(option.SpellName) {
+			continue
 		}
 
 		// Check if this spell can remove any of the status effects
