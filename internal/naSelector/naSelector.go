@@ -4,19 +4,12 @@ import (
 	"PandaBot/internal/entity"
 	"PandaBot/internal/registry"
 	"PandaBot/internal/spell"
+	"PandaBot/internal/status"
 	"fmt"
 	"log"
 	"sort"
 	"sync"
 )
-
-// StatusEffect represents a negative status effect that needs removal
-type StatusEffect struct {
-	ID       int    // Status effect ID from game
-	Name     string // Human readable name
-	Severity int    // Priority level (1-10, higher is more urgent)
-	NaSpell  string // Required "na" spell for removal
-}
 
 // NaSpellOption represents a "na" spell option with its effectiveness
 type NaSpellOption struct {
@@ -28,7 +21,7 @@ type NaSpellOption struct {
 
 // NaSpellSelector handles status effect removal spell selection
 type NaSpellSelector struct {
-	statusEffectMap map[int]*StatusEffect
+	statusEffectMap map[int]status.StatusInfo
 	naSpellMap      map[string]*NaSpellOption
 	mu              sync.RWMutex
 }
@@ -36,7 +29,7 @@ type NaSpellSelector struct {
 // NewNaSpellSelector creates a new "na" spell selector with default mappings
 func NewNaSpellSelector() *NaSpellSelector {
 	ns := &NaSpellSelector{
-		statusEffectMap: make(map[int]*StatusEffect),
+		statusEffectMap: make(map[int]status.StatusInfo),
 		naSpellMap:      make(map[string]*NaSpellOption),
 	}
 
@@ -48,40 +41,11 @@ func NewNaSpellSelector() *NaSpellSelector {
 
 // initializeDefaultMappings sets up the default status effect to spell mappings
 func (ns *NaSpellSelector) initializeDefaultMappings() {
-	// Common negative status effects and their removal spells
-	statusEffects := []*StatusEffect{
-		{ID: 2, Name: "Sleep", Severity: 6, NaSpell: ""}, // Cure is not a "na" spell in this context
-		{ID: 3, Name: "Poison", Severity: 5, NaSpell: "Poisona"},
-		{ID: 4, Name: "Paralysis", Severity: 8, NaSpell: "Paralyna"},
-		{ID: 5, Name: "Blindness", Severity: 4, NaSpell: "Blindna"},
-		{ID: 6, Name: "Silence", Severity: 7, NaSpell: "Silena"},
-		{ID: 7, Name: "Petrification", Severity: 9, NaSpell: "Stona"},
-		{ID: 8, Name: "Disease", Severity: 6, NaSpell: "Viruna"},
-		{ID: 31, Name: "Plague", Severity: 6, NaSpell: "Viruna"},
-		{ID: 9, Name: "Curse", Severity: 7, NaSpell: "Cursna"},
-		{ID: 10, Name: "Stun", Severity: 3, NaSpell: ""},             // No direct "na" spell
-		{ID: 11, Name: "Bind", Severity: 4, NaSpell: "Erase"},        // No direct "na" spell
-		{ID: 12, Name: "Weight", Severity: 3, NaSpell: "Erase"},      // No direct "na" spell
-		{ID: 13, Name: "Slow", Severity: 4, NaSpell: "Erase"},        // Erase can remove
-		{ID: 14, Name: "Attack Down", Severity: 3, NaSpell: "Erase"}, // Erase can remove
-		{ID: 15, Name: "Defense Down", Severity: 3, NaSpell: "Erase"},
-		{ID: 16, Name: "Magic Atk. Down", Severity: 3, NaSpell: "Erase"},
-		{ID: 17, Name: "Magic Def. Down", Severity: 3, NaSpell: "Erase"},
-		{ID: 136, Name: "STR Down", Severity: 3, NaSpell: "Erase"},
-		{ID: 137, Name: "DEX Down", Severity: 3, NaSpell: "Erase"},
-		{ID: 138, Name: "VIT Down", Severity: 3, NaSpell: "Erase"},
-		{ID: 139, Name: "AGI Down", Severity: 3, NaSpell: "Erase"},
-		{ID: 140, Name: "INT Down", Severity: 3, NaSpell: "Erase"},
-		{ID: 141, Name: "MND Down", Severity: 3, NaSpell: "Erase"},
-		{ID: 142, Name: "CHR Down", Severity: 3, NaSpell: "Erase"},
-		{ID: 146, Name: "Accuracy Down", Severity: 3, NaSpell: "Erase"},
-		{ID: 147, Name: "Evasion Down", Severity: 3, NaSpell: "Erase"},
-		{ID: 20, Name: "Doom", Severity: 10, NaSpell: "Cursna"},
-		{ID: 21, Name: "Amnesia", Severity: 7, NaSpell: ""}, // No direct "na" spell
-	}
-
-	for _, effect := range statusEffects {
-		ns.statusEffectMap[effect.ID] = effect
+	// Initialize status effect map from unified registry
+	for id, info := range status.Registry {
+		if !info.IsBuff {
+			ns.statusEffectMap[id] = info
+		}
 	}
 
 	// Names of "Na" spells and their target status effects
@@ -89,11 +53,14 @@ func (ns *NaSpellSelector) initializeDefaultMappings() {
 		"Poisona":  {3},
 		"Paralyna": {4},
 		"Blindna":  {5},
-		"Silena":   {6},
+		"Silena":   {6, 10},
 		"Stona":    {7},
 		"Viruna":   {8, 31},
 		"Cursna":   {9, 20},
-		"Erase":    {11, 12, 13, 14, 15, 16, 17, 136, 137, 138, 139, 140, 141, 142, 146, 147},
+		"Erase":    {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 136, 137, 138, 139, 140, 141, 142, 146, 147},
+		"Cure":     {2},
+		"Curaga":   {2},
+		"Sleep":    {14},
 	}
 
 	for name, targets := range spellTargets {
@@ -229,7 +196,7 @@ func (ns *NaSpellSelector) SelectOptimalNaSpell(statusEffects []int, availableMP
 }
 
 // GetStatusEffectInfo returns information about a specific status effect
-func (ns *NaSpellSelector) GetStatusEffectInfo(effectID int) (*StatusEffect, error) {
+func (ns *NaSpellSelector) GetStatusEffectInfo(effectID int) (*status.StatusInfo, error) {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
 
@@ -238,7 +205,7 @@ func (ns *NaSpellSelector) GetStatusEffectInfo(effectID int) (*StatusEffect, err
 		return nil, fmt.Errorf("status effect %d not found", effectID)
 	}
 
-	return effect, nil
+	return &effect, nil
 }
 
 // GetNaSpellInfo returns information about a specific "na" spell
@@ -306,7 +273,7 @@ func (ns *NaSpellSelector) AnalyzePartyMemberStatus(member *entity.Entity, avail
 }
 
 // AddStatusEffect adds or updates a status effect mapping
-func (ns *NaSpellSelector) AddStatusEffect(effect *StatusEffect) {
+func (ns *NaSpellSelector) AddStatusEffect(effect status.StatusInfo) {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
 

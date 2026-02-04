@@ -1,6 +1,7 @@
 package cureSelector
 
 import (
+	"PandaBot/internal/config"
 	"PandaBot/internal/entity"
 	"PandaBot/internal/registry"
 	"PandaBot/internal/spell"
@@ -78,10 +79,13 @@ func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []
 	}
 
 	// Evaluate Curaga options
-	if len(partyMembers) > 0 {
+	if len(partyMembers) >= config.Get().CuragaThreshold {
 		for _, option := range availableCuragaOptions {
 			totalEffectiveHeal := 0.0
 			for _, member := range partyMembers {
+				if !member.InMainParty {
+					continue
+				}
 				mMissing := cs.calculateMissingHP(member)
 				if mMissing <= 0 {
 					continue
@@ -209,14 +213,13 @@ func (cs *CureSelector) SelectCuragaForMultipleTargets(partyMembers []*entity.En
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
-	if len(partyMembers) < 3 {
-		return nil, fmt.Errorf("curaga selection requires 3 or more party members needing healing")
-	}
-
 	totalMissingHP := 0
 	membersNeedingHealing := 0
 
 	for _, member := range partyMembers {
+		if !member.InMainParty {
+			continue
+		}
 		missingHP := cs.calculateMissingHP(member)
 		if missingHP > 0 {
 			totalMissingHP += missingHP
@@ -247,14 +250,19 @@ func (cs *CureSelector) ShouldUseCuraga(partyMembers []*entity.Entity, available
 	membersNeedingHealing := 0
 	missingHPPerMember := make([]int, 0, len(partyMembers))
 	for _, member := range partyMembers {
+		if !member.InMainParty {
+			continue
+		}
 		missing := cs.calculateMissingHP(member)
-		if missing > 0 {
+		// Only count significant damage (e.g., > 10% or some minimum amount)
+		// This helps avoid Curaga for tiny chips of damage
+		if missing > 50 || (member.HPMax > 0 && float64(missing)/float64(member.HPMax) > 0.15) {
 			membersNeedingHealing++
 			missingHPPerMember = append(missingHPPerMember, missing)
 		}
 	}
 
-	if membersNeedingHealing >= 2 {
+	if membersNeedingHealing >= config.Get().CuragaThreshold {
 		availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel)
 		if len(availableCuragaOptions) == 0 {
 			return false, nil, fmt.Errorf("no curaga spells available with current MP and job levels")

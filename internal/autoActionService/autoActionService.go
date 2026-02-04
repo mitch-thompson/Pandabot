@@ -24,7 +24,6 @@ func NewAutoActionService(castingSystem *casting.CastingServerIntegration) *Auto
 
 // DecideNextAction determines the next action for a client based on the decision tree
 func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMonitor.StatusMonitor) (*protocol.ExecuteCommand, string, error) {
-	// 1. Am I silenced? -- echo drop
 	for _, statusID := range sm.PlayerStatus {
 		if statusID == 6 || statusID == 10 { // Silence IDs
 			if sm.EchoDropCount > 0 {
@@ -32,7 +31,6 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 					Command: "/item \"Echo Drops\" <me>",
 				}, "Silenced - Using Echo Drops", nil
 			}
-			// If silenced and no echo drops, we might be stuck, but for now just drop
 			return nil, "Silenced - No Echo Drops", nil
 		}
 	}
@@ -40,14 +38,21 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 	partyMap := sm.GetAllPartyMembers()
 	partyEntities := buildPartyEntities(sm)
 
-	// Get caster info
 	client := aas.findClientByName(playerName)
 	if client == nil {
 		return nil, "", fmt.Errorf("client %s not found", playerName)
 	}
 	clientInfo := client.GetClientInfo()
+	if clientInfo == nil {
+		return nil, "", fmt.Errorf("client info for %s not found", playerName)
+	}
 
-	// 2. Is anyone critical? -- if yes Are more than 1 person critical -- critical cure or curaga
+	for _, statusID := range sm.PlayerStatus {
+		if statusID == 2 { // Sleep
+			return nil, "Caster is slept", nil
+		}
+	}
+
 	criticalMembers := make([]*statusMonitor.PartyMember, 0)
 	for _, member := range partyMap {
 		if sm.GetHealthThreshold(member.HPPercent) == "critical" {
@@ -56,15 +61,12 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 	}
 
 	if len(criticalMembers) > 0 {
-		// Use casting engine to select optimal cure (it handles Curaga vs Cure)
-		// We need to pick one target to evaluate from
 		target := criticalMembers[0].Name
 		missingHP := criticalMembers[0].HPMax - criticalMembers[0].HPActual
 		if criticalMembers[0].HPMax == 0 {
 			missingHP = 100 - criticalMembers[0].HPPercent
 		}
 
-		// Find the entity for the target
 		var targetEntity *entity.Entity
 		for _, e := range partyEntities {
 			if e.Name == target {
@@ -89,12 +91,30 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		}
 	}
 
-	// 3. Any high priority debuffs? -- remove those (Severity 3 or 4)
+	sleptMembers := make([]string, 0)
+	for _, member := range partyMap {
+		for _, statusID := range member.StatusIDs {
+			if statusID == 2 {
+				sleptMembers = append(sleptMembers, member.Name)
+				break
+			}
+		}
+	}
+
+	if len(sleptMembers) > 1 {
+		return &protocol.ExecuteCommand{
+			Command: fmt.Sprintf("/ma \"Curaga\" %s", sleptMembers[0]),
+		}, fmt.Sprintf("Waking up multiple members: %v", sleptMembers), nil
+	} else if len(sleptMembers) == 1 {
+		return &protocol.ExecuteCommand{
+			Command: fmt.Sprintf("/ma \"Cure\" %s", sleptMembers[0]),
+		}, fmt.Sprintf("Waking up member: %s", sleptMembers[0]), nil
+	}
+
 	for _, member := range partyMap {
 		effect := sm.GetMostSevereStatusEffect(member)
 		if effect != nil && effect.Severity >= 3 {
-			spellName := effect.SpellID // This is currently mapped to spell name in GetMostSevereStatusEffect
-			// Check if we have a better name via naSelector
+			spellName := effect.NaSpell
 			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaAction(&casting.CastContext{
 				CasterMP:        clientInfo.MP,
 				CasterJobLevels: clientInfo.JobLevels,
@@ -275,7 +295,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 	for _, member := range partyMap {
 		effect := sm.GetMostSevereStatusEffect(member)
 		if effect != nil && effect.Severity == 2 {
-			spellName := effect.SpellID
+			spellName := effect.NaSpell
 			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaAction(&casting.CastContext{
 				CasterMP:        clientInfo.MP,
 				CasterJobLevels: clientInfo.JobLevels,
@@ -308,18 +328,22 @@ func (aas *AutoActionService) ProcessAutomaticActions(statusMonitor *statusMonit
 	// No-op, functionality moved to DecideNextAction
 }
 
-// buildPartyEntities converts the status monitor's party view into entity.Entity list
+// buildPartyEntities converts the status monitor's party view into entity.Entity list (Main Party only)
 func buildPartyEntities(sm *statusMonitor.StatusMonitor) []*entity.Entity {
 	partyMap := sm.GetAllPartyMembers()
 	entities := make([]*entity.Entity, 0, len(partyMap))
 	for name, pm := range partyMap {
+		if !pm.InMainParty {
+			continue
+		}
 		e := &entity.Entity{
-			Name:      name,
-			HPPercent: uint8(pm.HPPercent),
-			MPPercent: uint8(pm.MPPercent),
-			HPcurrent: uint32(pm.HPActual),
-			HPMax:     uint32(pm.HPMax),
-			Zone:      uint16(pm.Zone),
+			Name:        name,
+			HPPercent:   uint8(pm.HPPercent),
+			MPPercent:   uint8(pm.MPPercent),
+			HPcurrent:   uint32(pm.HPActual),
+			HPMax:       uint32(pm.HPMax),
+			Zone:        uint16(pm.Zone),
+			InMainParty: pm.InMainParty,
 			// Job fields are optional for Curaga decision; leave empty if unknown
 		}
 		entities = append(entities, e)

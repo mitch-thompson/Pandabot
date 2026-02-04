@@ -17,6 +17,7 @@ type Entity struct {
 	JobLevel    uint8
 	SubJob      string
 	SubJobLevel uint8
+	InMainParty bool // True if in p0-p5, false if in alliance p6-p17
 }
 
 func (e *Entity) HasStatus(id StatusID) bool {

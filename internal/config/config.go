@@ -11,7 +11,12 @@ import (
 
 type Config struct {
 	CureThreshold    int  `toml:"cure_threshold_percent"`
+	CuragaThreshold  int  `toml:"curaga_threshold_count"`
 	NaRemovalEnabled bool `toml:"na_removal_enabled"`
+	HealthThresholds struct {
+		Critical int `toml:"critical"`
+		Low      int `toml:"low"`
+	} `toml:"health_thresholds"`
 }
 
 var active atomic.Value
@@ -43,7 +48,12 @@ func Load() {
 
 var defaultConfig = `
 cure_threshold_percent = 70
-na_remove_enabled = true
+curaga_threshold_count = 3
+na_removal_enabled = true
+
+[health_thresholds]
+critical = 25
+low = 75
 `
 
 func watch() {

@@ -15,6 +15,7 @@ import (
 	"PandaBot/internal/autoActionService"
 	"PandaBot/internal/buffSelector"
 	"PandaBot/internal/casting"
+	"PandaBot/internal/config"
 	"PandaBot/internal/cureSelector"
 	"PandaBot/internal/job"
 	"PandaBot/internal/naSelector"
@@ -128,18 +129,32 @@ func NewServer(config *Config) *Server {
 
 // DefaultConfig returns a default server configuration
 func DefaultConfig() *Config {
+	cfg := config.Get()
 	return &Config{
 		Port:                 31337,
 		StatusUpdateInterval: 5 * time.Second,
 		ClientTimeout:        30 * time.Second,
 		MaxClients:           10,
 		HealthThresholds: statusMonitor.HealthThresholds{
-			Critical: 25,
-			Low:      50,
-			Medium:   75,
+			Critical: cfg.HealthThresholds.Critical,
+			Low:      cfg.HealthThresholds.Low,
+			Medium:   cfg.CureThreshold,
 		},
 		LogLevel: "INFO",
 	}
+}
+
+func (s *Server) UpdateFromConfig() {
+	cfg := config.Get()
+	s.config.HealthThresholds.Critical = cfg.HealthThresholds.Critical
+	s.config.HealthThresholds.Low = cfg.HealthThresholds.Low
+	s.config.HealthThresholds.Medium = cfg.CureThreshold
+
+	s.statusMonitor.SetHealthThresholds(
+		s.config.HealthThresholds.Critical,
+		s.config.HealthThresholds.Low,
+		s.config.HealthThresholds.Medium,
+	)
 }
 
 // Start starts the server
@@ -154,11 +169,7 @@ func (s *Server) Start() error {
 	log.Printf("PandaBot server started on port %d", s.config.Port)
 
 	// Configure components
-	s.statusMonitor.SetHealthThresholds(
-		s.config.HealthThresholds.Critical,
-		s.config.HealthThresholds.Low,
-		s.config.HealthThresholds.Medium,
-	)
+	s.UpdateFromConfig()
 
 	// Start background routines
 	go s.acceptConnections()
@@ -350,19 +361,24 @@ func (s *Server) handleStatusUpdate(client *Client, parts []string) {
 	// Process player (parts[2])
 	playerData := strings.Split(parts[2], ":")
 	if len(playerData) >= 8 {
-		processPartyMember(s, client, playerData, true) // true for isPlayer
+		processPartyMember(s, client, playerData, true, true) // true for isPlayer, player is always main party
 	}
 
 	// Process party members (parts[3], semicolon-separated)
 	if len(parts) > 3 {
 		memberStrs := strings.Split(parts[3], ";")
-		for _, memberStr := range memberStrs {
+		for i, memberStr := range memberStrs {
 			if memberStr == "" {
 				continue
 			}
 			memberData := strings.Split(memberStr, ":")
 			if len(memberData) >= 8 {
-				processPartyMember(s, client, memberData, false)
+				// Based on issue description: p0-p5 (main party), p6-p17 (alliance)
+				// The player (p0) is sent separately in parts[2].
+				// The others (p1-p17) are sent in parts[3].
+				// So index 0-4 in memberStrs are likely p1-p5.
+				inMainParty := i < 5
+				processPartyMember(s, client, memberData, false, inMainParty)
 			}
 		}
 	}
@@ -371,7 +387,7 @@ func (s *Server) handleStatusUpdate(client *Client, parts []string) {
 }
 
 // Helper function to process a party member (player or other)
-func processPartyMember(s *Server, client *Client, memberData []string, isPlayer bool) {
+func processPartyMember(s *Server, client *Client, memberData []string, isPlayer bool, inMainParty bool) {
 	name := memberData[0]
 	hpPercent, _ := strconv.Atoi(memberData[1])
 	mpPercent, _ := strconv.Atoi(memberData[2])
@@ -418,6 +434,7 @@ func processPartyMember(s *Server, client *Client, memberData []string, isPlayer
 		job,
 		zone,
 		statusIDs,
+		inMainParty,
 	)
 
 	// If this is the player, update client info
@@ -987,6 +1004,7 @@ func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interfac
 			job,
 			memberZone,
 			statusIDs,
+			true, // Currently assume true for JSON updates
 		)
 
 		// If this is the player, update additional info

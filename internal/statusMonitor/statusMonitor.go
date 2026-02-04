@@ -1,6 +1,7 @@
 package statusMonitor
 
 import (
+	"PandaBot/internal/status"
 	"fmt"
 	"strings"
 	"time"
@@ -10,7 +11,7 @@ import (
 type StatusMonitor struct {
 	partyMembers     map[string]*PartyMember
 	healthThresholds HealthThresholds
-	statusEffects    map[int]StatusEffectInfo
+	statusEffects    map[int]status.StatusInfo
 	lastUpdate       time.Time
 	updateInterval   time.Duration
 	PlayerName       string
@@ -34,7 +35,8 @@ type PartyMember struct {
 	LastSeen           time.Time
 	NeedsHealing       bool
 	NeedsStatusRemoval bool
-	Priority           int // Higher number = higher priority
+	Priority           int  // Higher number = higher priority
+	InMainParty        bool // True if in p0-p5, false if in alliance p6-p17
 }
 
 // DesiredBuff represents a buff that should be maintained
@@ -52,13 +54,6 @@ type HealthThresholds struct {
 }
 
 // StatusEffectInfo contains information about status effects
-type StatusEffectInfo struct {
-	ID       int
-	Name     string
-	Severity int    // 1=minor, 2=moderate, 3=severe, 4=critical
-	SpellID  string // The "na" spell to cure it
-}
-
 // ActionTrigger represents a triggered action
 type ActionTrigger struct {
 	Type     string // "cure", "na_spell", "buff", "echo_drop", "manual_spell"
@@ -77,73 +72,31 @@ func NewStatusMonitor() *StatusMonitor {
 			Low:      50,
 			Medium:   75,
 		},
-		statusEffects:  getDefaultStatusEffects(),
+		statusEffects:  status.Registry,
 		updateInterval: 5 * time.Second,
 		PlayerStatus:   make([]int, 0),
 	}
 }
 
-// getDefaultStatusEffects returns the default status effect mappings
-func getDefaultStatusEffects() map[int]StatusEffectInfo {
-	return map[int]StatusEffectInfo{
-		2:   {ID: 2, Name: "Sleep", Severity: 3, SpellID: "Sleep"},
-		3:   {ID: 3, Name: "Poison", Severity: 2, SpellID: "Poisona"},
-		4:   {ID: 4, Name: "Paralysis", Severity: 3, SpellID: "Paralyna"},
-		5:   {ID: 5, Name: "Blindness", Severity: 2, SpellID: "Blindna"},
-		6:   {ID: 6, Name: "Silence", Severity: 3, SpellID: "Silena"},
-		7:   {ID: 7, Name: "Petrification", Severity: 4, SpellID: "Stona"},
-		8:   {ID: 8, Name: "Disease", Severity: 2, SpellID: "Viruna"},
-		9:   {ID: 9, Name: "Curse", Severity: 3, SpellID: "Cursna"},
-		10:  {ID: 10, Name: "Silence", Severity: 3, SpellID: "Silena"}, // Duplicate for some FFXI versions?
-		11:  {ID: 11, Name: "Bind", Severity: 2, SpellID: "Erase"},
-		12:  {ID: 12, Name: "Weight", Severity: 2, SpellID: "Erase"},
-		13:  {ID: 13, Name: "Slow", Severity: 2, SpellID: "Erase"},
-		14:  {ID: 14, Name: "Charm", Severity: 4, SpellID: "Sleep"},
-		17:  {ID: 17, Name: "Attack Down", Severity: 2, SpellID: "Erase"},
-		18:  {ID: 18, Name: "Evasion Down", Severity: 2, SpellID: "Erase"},
-		19:  {ID: 19, Name: "Defense Down", Severity: 2, SpellID: "Erase"},
-		20:  {ID: 20, Name: "Magic Def. Down", Severity: 2, SpellID: "Erase"},
-		21:  {ID: 21, Name: "Magic Atk. Down", Severity: 2, SpellID: "Erase"},
-		28:  {ID: 28, Name: "Terror", Severity: 4, SpellID: "Terror"},
-		31:  {ID: 31, Name: "Plague", Severity: 3, SpellID: "Viruna"},
-		33:  {ID: 33, Name: "Haste", Severity: 1, SpellID: "Haste"},
-		40:  {ID: 40, Name: "Protect", Severity: 1, SpellID: "Protect"},
-		41:  {ID: 41, Name: "Shell", Severity: 1, SpellID: "Shell"},
-		42:  {ID: 42, Name: "Regen", Severity: 1, SpellID: "Regen"},
-		100: {ID: 100, Name: "Barfire", Severity: 1, SpellID: "Barfira"},
-		101: {ID: 101, Name: "Barblizzard", Severity: 1, SpellID: "Barblizzara"},
-		102: {ID: 102, Name: "Baraero", Severity: 1, SpellID: "Baraera"},
-		103: {ID: 103, Name: "Barstone", Severity: 1, SpellID: "Barstonra"},
-		104: {ID: 104, Name: "Barthunder", Severity: 1, SpellID: "Barthundra"},
-		105: {ID: 105, Name: "Barwater", Severity: 1, SpellID: "Barwatera"},
-		113: {ID: 113, Name: "Reraise", Severity: 1, SpellID: "Reraise"},
-		173: {ID: 173, Name: "Ability", Severity: 0, SpellID: "None"},
-		272: {ID: 272, Name: "Auspice", Severity: 1, SpellID: "Auspice"},
-		358: {ID: 358, Name: "Light Arts", Severity: 1, SpellID: "Light Arts"},
-		359: {ID: 359, Name: "Dark Arts", Severity: 1, SpellID: "Dark Arts"},
-		417: {ID: 417, Name: "Afflatus Solace", Severity: 1, SpellID: "Afflatus Solace"},
-		418: {ID: 418, Name: "Afflatus Misery", Severity: 1, SpellID: "Afflatus Misery"},
-	}
-}
-
 // UpdatePartyMember updates a party member's status
-func (sm *StatusMonitor) UpdatePartyMember(name string, hpPercent, mpPercent, job, zone int, statusIDs []int) {
-	sm.UpdatePartyMemberWithActuals(name, hpPercent, mpPercent, 0, 0, job, zone, statusIDs)
+func (sm *StatusMonitor) UpdatePartyMember(name string, hpPercent, mpPercent, job, zone int, statusIDs []int, inMainParty bool) {
+	sm.UpdatePartyMemberWithActuals(name, hpPercent, mpPercent, 0, 0, job, zone, statusIDs, inMainParty)
 }
 
 // UpdatePartyMemberWithActuals updates a party member's status including actual HP/MP values
-func (sm *StatusMonitor) UpdatePartyMemberWithActuals(name string, hpPercent, mpPercent, hpActual, mpActual, job, zone int, statusIDs []int) {
-	sm.UpdatePartyMemberWithMaxValues(name, hpPercent, mpPercent, hpActual, mpActual, 0, 0, job, zone, statusIDs)
+func (sm *StatusMonitor) UpdatePartyMemberWithActuals(name string, hpPercent, mpPercent, hpActual, mpActual, job, zone int, statusIDs []int, inMainParty bool) {
+	sm.UpdatePartyMemberWithMaxValues(name, hpPercent, mpPercent, hpActual, mpActual, 0, 0, job, zone, statusIDs, inMainParty)
 }
 
 // UpdatePartyMemberWithMaxValues updates a party member's status including actual and max HP/MP values
-func (sm *StatusMonitor) UpdatePartyMemberWithMaxValues(name string, hpPercent, mpPercent, hpActual, mpActual, hpMax, mpMax, job, zone int, statusIDs []int) {
+func (sm *StatusMonitor) UpdatePartyMemberWithMaxValues(name string, hpPercent, mpPercent, hpActual, mpActual, hpMax, mpMax, job, zone int, statusIDs []int, inMainParty bool) {
 	member, exists := sm.partyMembers[name]
 	if !exists {
 		member = &PartyMember{
 			Name:         name,
 			Priority:     sm.calculateMemberPriority(job),
 			DesiredBuffs: make(map[int]DesiredBuff),
+			InMainParty:  inMainParty,
 		}
 		sm.partyMembers[name] = member
 	}
@@ -158,6 +111,7 @@ func (sm *StatusMonitor) UpdatePartyMemberWithMaxValues(name string, hpPercent, 
 	member.Zone = zone
 	member.StatusIDs = statusIDs
 	member.LastSeen = time.Now()
+	member.InMainParty = inMainParty
 
 	// Update needs flags
 	member.NeedsHealing = sm.needsHealing(member)
@@ -236,15 +190,17 @@ func (sm *StatusMonitor) GetHealthThreshold(hpPercent int) string {
 }
 
 // GetMostSevereStatusEffect returns the most severe status effect for a member
-func (sm *StatusMonitor) GetMostSevereStatusEffect(member *PartyMember) *StatusEffectInfo {
-	var mostSevere *StatusEffectInfo
+func (sm *StatusMonitor) GetMostSevereStatusEffect(member *PartyMember) *status.StatusInfo {
+	var mostSevere *status.StatusInfo
 	maxSeverity := 0
 
 	for _, statusID := range member.StatusIDs {
 		if effect, exists := sm.statusEffects[statusID]; exists {
 			if effect.Severity > maxSeverity {
 				maxSeverity = effect.Severity
-				mostSevere = &effect
+				// Create a local copy to avoid referencing the loop variable 'effect'
+				temp := effect
+				mostSevere = &temp
 			}
 		}
 	}
@@ -296,7 +252,7 @@ func (sm *StatusMonitor) CheckForActions() []ActionTrigger {
 				action := ActionTrigger{
 					Type:     "na_spell",
 					Target:   member.Name,
-					Spell:    effect.SpellID,
+					Spell:    effect.NaSpell,
 					Priority: priority,
 					Reason:   fmt.Sprintf("Has %s (severity %d)", effect.Name, effect.Severity),
 				}
@@ -353,7 +309,7 @@ func (sm *StatusMonitor) calculateHealingPriority(member *PartyMember, threshold
 }
 
 // calculateStatusRemovalPriority determines status removal priority
-func (sm *StatusMonitor) calculateStatusRemovalPriority(member *PartyMember, effect *StatusEffectInfo) int {
+func (sm *StatusMonitor) calculateStatusRemovalPriority(member *PartyMember, effect *status.StatusInfo) int {
 	basePriority := member.Priority
 	severityBonus := effect.Severity * 15
 
@@ -475,19 +431,19 @@ func (sm *StatusMonitor) GetLastUpdateTime() time.Time {
 func GetBuffToStatusMap() map[string]int {
 	m := make(map[string]int)
 
-	// Derive from default status effects
-	for id, info := range getDefaultStatusEffects() {
-		if info.Severity <= 1 && info.SpellID != "None" {
+	// Derive from status registry
+	for id, info := range status.Registry {
+		if info.IsBuff && info.NaSpell != "None" {
 			// Use both the status name and the spell name as triggers
 			m[strings.ToLower(info.Name)] = id
-			m[strings.ToLower(info.SpellID)] = id
+			m[strings.ToLower(info.NaSpell)] = id
 
 			// Special case for names with spaces (also add version without space)
 			if strings.Contains(info.Name, " ") {
 				m[strings.ToLower(strings.ReplaceAll(info.Name, " ", ""))] = id
 			}
-			if strings.Contains(info.SpellID, " ") {
-				m[strings.ToLower(strings.ReplaceAll(info.SpellID, " ", ""))] = id
+			if strings.Contains(info.NaSpell, " ") {
+				m[strings.ToLower(strings.ReplaceAll(info.NaSpell, " ", ""))] = id
 			}
 		}
 	}

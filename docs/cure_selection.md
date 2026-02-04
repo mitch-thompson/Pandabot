@@ -37,12 +37,30 @@ The selection of a cure spell level follows these primary steps:
 
 Curaga level selection is based on the average missing HP of party members:
 
-1.  **Threshold**: Curaga is considered if 2 or more party members need healing (3+ for specific multi-target calls).
-2.  **Efficiency Check**: Curaga is only chosen if its MP cost is less than or equal to the estimated total cost of casting individual cures for each member.
-3.  **Level Selection**: The system selects the Curaga level that maximizes:
+1.  **Threshold**: Curaga is considered if the number of party members needing healing meets or exceeds the `curaga_threshold_count` (defined in `config.toml`, defaults to 3).
+2.  **Significant Damage**: Only members with significant damage (missing > 50 HP or > 15% of Max HP) are counted towards the threshold to avoid using Curaga for minor chip damage.
+3.  **Efficiency Check**: Curaga is only chosen if its MP cost is less than or equal to the estimated total cost of casting individual cures for each member.
+4.  **Level Selection**: The system selects the Curaga level that maximizes:
     `Score = (HealAmount * MembersCount / MPCost) * (1.0 - OverhealWaste * 0.4)`
     - This favors spells that heal the group efficiently while penalizing significant overheal based on the average missing HP.
     - A 20% bonus is applied if more than 4 members are being healed.
+
+#### Configuration Thresholds
+
+The following thresholds can be adjusted in `config.toml`:
+
+- **`cure_threshold_percent`** (Default: 70): The HP percentage below which a party member is considered to "need" a cure. This maps to the **Medium** health threshold.
+- **`health_thresholds.critical`** (Default: 25): The HP percentage below which a party member is in critical condition.
+- **`health_thresholds.low`** (Default: 50): The HP percentage below which a party member is in low health condition.
+- **`curaga_threshold_count`** (Default: 3): The minimum number of party members needing healing to trigger a Curaga evaluation.
+
+#### Internal Thresholds (Hardcoded)
+
+Some logic uses hardcoded values for safety and stability:
+
+- **Significant Damage (Curaga)**: A member only counts towards the `curaga_threshold_count` if they are missing more than **50 HP** OR more than **15%** of their Max HP (`internal/cureSelector/cureSelector.go`).
+- **Emergency Mode**: In emergency mode, the system favors spells that cover at least **80%** of missing HP (`internal/cureSelector/cureSelector.go`).
+- **Efficiency Bonus**: A 1.5x appropriateness bonus is applied if a spell covers **70-120%** of missing HP (`internal/cureSelector/cureSelector.go`).
 
 #### Summary of Cure Levels
 

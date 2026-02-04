@@ -1,13 +1,13 @@
 package casting
 
 import (
-	"fmt"
-	"time"
-
 	"PandaBot/internal/action"
+	"PandaBot/internal/config"
 	"PandaBot/internal/cureSelector"
 	"PandaBot/internal/entity"
 	"PandaBot/internal/registry"
+	"fmt"
+	"time"
 )
 
 // CastingHelper provides convenient methods for common casting operations
@@ -283,7 +283,7 @@ func (ch *CastingHelper) CastPartyCures(partyMembers []*entity.Entity, casterMP 
 	}
 
 	// If multiple members are injured, check if Curaga is cheaper and prioritize it
-	if len(injured) >= 2 { // allow curaga consideration for 2 or more based on efficiency
+	if len(injured) >= config.Get().CuragaThreshold { // allow curaga consideration based on config
 		availableMP := casterMP
 		// Respect engine MP reservation if configured
 		if ch.engine != nil && ch.engine.config != nil {
