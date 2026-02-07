@@ -10,6 +10,16 @@ jobs:
       tag: '1.25'
     steps:
       - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y libgl1-mesa-dev xorg-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev gcc-mingw-w64
+      - run:
+          name: Set PKG_CONFIG_PATH
+          command: |
+            # Ensure pkg-config can find gl.pc if it's in a non-standard location (usually it's fine)
+            echo 'export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:/usr/lib/pkgconfig:/usr/share/pkgconfig' >> $BASH_ENV
       - go/load-cache
       - go/mod-download
       - go/save-cache
@@ -23,13 +33,22 @@ jobs:
       tag: '1.25'
     steps:
       - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y libgl1-mesa-dev xorg-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev gcc-mingw-w64
+      - run:
+          name: Set PKG_CONFIG_PATH
+          command: |
+            echo 'export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:/usr/lib/pkgconfig:/usr/share/pkgconfig' >> $BASH_ENV
       - go/load-cache
       - go/mod-download
       - run:
           name: Build Windows Executable
           command: |
             mkdir -p dist
-            GOOS=windows GOARCH=amd64 go build -o dist/pandabot.exe ./cmd/pandabot
+            GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc go build -o dist/pandabot.exe ./cmd/pandabot
             cp -r cmd/addon dist/
       - run:
           name: Package for Windows
