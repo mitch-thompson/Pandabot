@@ -1,3 +1,4 @@
+#if defined(_WIN32) || defined(_WIN64)
 #include <windows.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -93,3 +94,4 @@ __declspec(dllexport) IPlugin* __stdcall CreatePlugin(const char* args) {
     }
     return gPlugin;
 }
+#endif

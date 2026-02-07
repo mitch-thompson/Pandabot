@@ -25,7 +25,9 @@ jobs:
       - go/save-cache
       - run:
           name: Run Tests
-          command: go test -v ./...
+          command: |
+            go list ./...
+            go test -v ./... || (echo "Tests failed or no tests found" && exit 1)
 
   build-windows:
     executor:
