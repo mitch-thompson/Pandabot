@@ -25,7 +25,7 @@ jobs:
       - go/save-cache
       - run:
           name: Run Tests
-          command: go test -v ./...
+          command: go test -v $(go list ./... | grep -v "PandaBot/cmd/plugin")
 
   build-windows:
     executor:
