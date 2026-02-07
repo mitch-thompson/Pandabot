@@ -58,6 +58,8 @@ type Server struct {
 	// State
 	running  bool
 	stopChan chan struct{}
+	PLSource string // Name of the player who sent "power level"
+	PLTarget string // Name of the player who received "power level"
 }
 
 const MaxCommandQueueSize = 100
@@ -99,6 +101,7 @@ type Client struct {
 	commandQueue   []*QueuedCommand
 	currentCommand *QueuedCommand
 	queueMutex     sync.RWMutex
+	statusMonitor  *statusMonitor.StatusMonitor
 }
 
 // Config holds server configuration
@@ -120,7 +123,8 @@ func NewServer(config *Config) *Server {
 	}
 	castingSystem.GetCastingEngine().Player = p
 
-	return &Server{
+	aas := autoActionService.NewAutoActionService(castingSystem)
+	s := &Server{
 		clients:           make(map[net.Conn]*Client),
 		textParser:        textParser.NewTextParser(),
 		prioritizer:       prioritizer.NewSpellPrioritizer(),
@@ -131,10 +135,13 @@ func NewServer(config *Config) *Server {
 		Player:            p,
 		castingSystem:     castingSystem,
 		triggerService:    triggerService.NewTriggerService(castingSystem),
-		autoActionService: autoActionService.NewAutoActionService(castingSystem),
+		autoActionService: aas,
 		config:            config,
 		stopChan:          make(chan struct{}),
 	}
+	aas.PLSource = &s.PLSource
+	aas.PLTarget = &s.PLTarget
+	return s
 }
 
 // DefaultConfig returns a default server configuration
@@ -242,11 +249,12 @@ func (s *Server) acceptConnections() {
 		}
 
 		client := &Client{
-			conn:         conn,
-			reader:       bufio.NewReader(conn),
-			writer:       bufio.NewWriter(conn),
-			lastSeen:     time.Now(),
-			commandQueue: make([]*QueuedCommand, 0),
+			conn:          conn,
+			reader:        bufio.NewReader(conn),
+			writer:        bufio.NewWriter(conn),
+			lastSeen:      time.Now(),
+			commandQueue:  make([]*QueuedCommand, 0),
+			statusMonitor: statusMonitor.NewStatusMonitor(),
 		}
 
 		s.clientsMutex.Lock()
@@ -256,7 +264,7 @@ func (s *Server) acceptConnections() {
 		log.Printf("Client connected from %s", conn.RemoteAddr())
 
 		// Register with casting system (will be updated with player name later)
-		s.castingSystem.RegisterClient(conn, "")
+		s.castingSystem.RegisterClient(conn, "", client.statusMonitor)
 
 		go s.handleClient(client)
 	}
@@ -543,7 +551,7 @@ func (s *Server) handleSpellComplete(client *Client, parts []string) {
 
 		// Clear current command and process next in queue
 		client.currentCommand = nil
-		go s.processCommandQueue(client)
+		go s.processCommandQueue(client, false)
 	} else {
 		log.Printf("Received completion for unknown command %s from %s", commandID, client.conn.RemoteAddr())
 	}
@@ -572,7 +580,7 @@ func (s *Server) handleSpellFailed(client *Client, parts []string) {
 
 		// Clear current command and process next in queue
 		client.currentCommand = nil
-		go s.processCommandQueue(client)
+		go s.processCommandQueue(client, false)
 	} else {
 		log.Printf("Received failure for unknown command %s from %s", commandID, client.conn.RemoteAddr())
 	}
@@ -675,7 +683,7 @@ func (s *Server) handleJSONActionComplete(client *Client, msg *protocol.Message)
 
 		// Clear current command and process next in queue
 		client.currentCommand = nil
-		go s.processCommandQueue(client)
+		go s.processCommandQueue(client, false)
 	} else {
 		log.Printf("Received completion for unknown command %s from %s", complete.CommandID, client.conn.RemoteAddr())
 	}
@@ -726,7 +734,7 @@ func (s *Server) handleJSONActionFailed(client *Client, msg *protocol.Message) {
 
 		// Clear current command and process next in queue
 		client.currentCommand = nil
-		go s.processCommandQueue(client)
+		go s.processCommandQueue(client, false)
 	} else {
 		log.Printf("Received failure for unknown command %s from %s", failed.CommandID, client.conn.RemoteAddr())
 	}
@@ -789,7 +797,7 @@ func (s *Server) handleJSONReadyForAction(client *Client, msg *protocol.Message)
 
 	// If decision tree has nothing, fallback to old queue for now
 	// but the goal is to deprecate it.
-	s.processCommandQueue(client)
+	s.processCommandQueue(client, false)
 }
 
 // handleJSONReadyResponse processes a JSON ready response notification
@@ -837,6 +845,23 @@ func (s *Server) handleJSONChatMessage(client *Client, msg *protocol.Message) {
 
 		// Route trigger events to centralized casting system
 		s.triggerService.RouteTriggerEvents(triggerEvents, s.statusMonitor)
+	}
+
+	// Power Leveling Mode detection
+	// mode 13/14 are typically incoming tells
+	if (chat.Mode == 13 || chat.Mode == 14) && strings.Contains(strings.ToLower(chat.Message), "power level") {
+		// Only enable if both are connected (implied since we received the tell from sender and we are here)
+		s.PLSource = chat.Sender
+		s.PLTarget = client.playerName
+		log.Printf("POWER LEVELING MODE ENABLED: %s is power leveling %s", s.PLTarget, s.PLSource)
+	}
+
+	if strings.Contains(strings.ToLower(chat.Message), "stop pl") {
+		if chat.Sender == s.PLSource || chat.Sender == s.PLTarget {
+			s.PLSource = ""
+			s.PLTarget = ""
+			log.Printf("POWER LEVELING MODE DISABLED by %s", chat.Sender)
+		}
 	}
 }
 
@@ -1027,6 +1052,23 @@ func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interfac
 			true, // Currently assume true for JSON updates
 		)
 
+		// Update local per-client status monitor
+		if client.statusMonitor != nil {
+			client.statusMonitor.UpdatePartyMemberWithMaxValues(
+				name,
+				hpPercent,
+				mpPercent,
+				hpActual,
+				mpActual,
+				hpMax,
+				mpMax,
+				job,
+				memberZone,
+				statusIDs,
+				true,
+			)
+		}
+
 		// If this is the player, update additional info
 		if name == playerName {
 			// Update player object available spells
@@ -1185,12 +1227,13 @@ func (s *Server) queueCommandForClient(client *Client, command string, target st
 	// Only try to send the next command if no command is currently in progress
 	if client.currentCommand == nil {
 		// Use a goroutine to avoid deadlock since we're already holding the mutex
-		go s.processCommandQueue(client)
+		go s.processCommandQueue(client, false)
 	}
 }
 
-// processCommandQueue sends the next command if possible
-func (s *Server) processCommandQueue(client *Client) {
+// processCommandQueue sends the next command if possible.
+// fromTicker is true if called from the background ticker (used for rate limiting).
+func (s *Server) processCommandQueue(client *Client, fromTicker bool) {
 	client.queueMutex.Lock()
 	defer client.queueMutex.Unlock()
 
@@ -1204,9 +1247,14 @@ func (s *Server) processCommandQueue(client *Client) {
 			now := time.Now()
 			client.currentCommand.CompletedAt = &now
 			client.currentCommand = nil
+			// After timeout, we can proceed to pull next command
 		} else {
 			return // Still waiting for current command to complete
 		}
+	} else if fromTicker {
+		// If called from ticker and nothing is in progress, DON'T pull a new command.
+		// This implements rate limiting - we only pull when receiving completion/failure or when a new command is queued.
+		return
 	}
 
 	// Find next command to send
@@ -1339,7 +1387,7 @@ func (s *Server) processStatusUpdates() {
 	}
 }
 
-// processCommandQueues periodically processes command queues and handles timeouts
+// processCommandQueues periodically handles timeouts and validates queues
 func (s *Server) processCommandQueues() {
 	ticker := time.NewTicker(1 * time.Second) // Check every second
 	defer ticker.Stop()
@@ -1349,8 +1397,11 @@ func (s *Server) processCommandQueues() {
 		case <-ticker.C:
 			s.clientsMutex.RLock()
 			for _, client := range s.clients {
-				// We still need s.processCommandQueue(client) to handle timeouts
-				s.processCommandQueue(client)
+				// We only call processCommandQueue here to handle TIMEOUTS
+				// It will return early if there's a command in progress that hasn't timed out.
+				// It won't pull a new command if one is already in progress.
+				s.processCommandQueue(client, true)
+
 				// Periodically validate the queue even if no status update received
 				s.validateQueuedActions(client)
 			}

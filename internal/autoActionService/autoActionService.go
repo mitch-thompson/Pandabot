@@ -13,6 +13,8 @@ import (
 // AutoActionService handles automatic actions based on party status
 type AutoActionService struct {
 	castingSystem *casting.CastingServerIntegration
+	PLSource      *string
+	PLTarget      *string
 }
 
 // NewAutoActionService creates a new auto action service
@@ -24,6 +26,11 @@ func NewAutoActionService(castingSystem *casting.CastingServerIntegration) *Auto
 
 // DecideNextAction determines the next action for a client based on the decision tree
 func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMonitor.StatusMonitor) (*protocol.ExecuteCommand, string, error) {
+	// 0. Power Leveling Mode logic
+	if aas.PLSource != nil && *aas.PLSource == playerName {
+		return nil, "Power Leveling Mode: Source player is not casting", nil
+	}
+
 	for _, statusID := range sm.PlayerStatus {
 		if statusID == 6 || statusID == 10 { // Silence IDs
 			if sm.EchoDropCount > 0 {
@@ -36,7 +43,25 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 	}
 
 	partyMap := sm.GetAllPartyMembers()
-	partyEntities := buildPartyEntities(sm)
+
+	// If this is the PL target, consider the PL source's party members
+	if aas.PLTarget != nil && *aas.PLTarget == playerName && aas.PLSource != nil && *aas.PLSource != "" {
+		sourceClient := aas.findClientByName(*aas.PLSource)
+		if sourceClient != nil {
+			sourceSM := sourceClient.GetStatusMonitor()
+			if sourceSM != nil {
+				// Add PL source's party members to our partyMap for healing consideration
+				sourceParty := sourceSM.GetAllPartyMembers()
+				for name, member := range sourceParty {
+					if _, exists := partyMap[name]; !exists {
+						partyMap[name] = member
+					}
+				}
+			}
+		}
+	}
+
+	partyEntities := buildPartyEntitiesFromMap(partyMap)
 
 	client := aas.findClientByName(playerName)
 	if client == nil {
@@ -328,9 +353,8 @@ func (aas *AutoActionService) ProcessAutomaticActions(statusMonitor *statusMonit
 	// No-op, functionality moved to DecideNextAction
 }
 
-// buildPartyEntities converts the status monitor's party view into entity.Entity list (Main Party only)
-func buildPartyEntities(sm *statusMonitor.StatusMonitor) []*entity.Entity {
-	partyMap := sm.GetAllPartyMembers()
+// buildPartyEntitiesFromMap converts a map of party members into entity.Entity list (Main Party only)
+func buildPartyEntitiesFromMap(partyMap map[string]*statusMonitor.PartyMember) []*entity.Entity {
 	entities := make([]*entity.Entity, 0, len(partyMap))
 	for name, pm := range partyMap {
 		if !pm.InMainParty {
@@ -344,9 +368,13 @@ func buildPartyEntities(sm *statusMonitor.StatusMonitor) []*entity.Entity {
 			HPMax:       uint32(pm.HPMax),
 			Zone:        uint16(pm.Zone),
 			InMainParty: pm.InMainParty,
-			// Job fields are optional for Curaga decision; leave empty if unknown
 		}
 		entities = append(entities, e)
 	}
 	return entities
+}
+
+// buildPartyEntities converts the status monitor's party view into entity.Entity list (Main Party only)
+func buildPartyEntities(sm *statusMonitor.StatusMonitor) []*entity.Entity {
+	return buildPartyEntitiesFromMap(sm.GetAllPartyMembers())
 }

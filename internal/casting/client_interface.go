@@ -2,6 +2,7 @@ package casting
 
 import (
 	"PandaBot/internal/action"
+	"PandaBot/internal/statusMonitor"
 	"fmt"
 	"time"
 )
@@ -13,6 +14,9 @@ type ClientInterface interface {
 
 	// GetClientInfo returns information about the client's current state
 	GetClientInfo() *ClientInfo
+
+	// GetStatusMonitor returns the client's local party status monitor
+	GetStatusMonitor() *statusMonitor.StatusMonitor
 
 	// IsConnected returns whether the client is currently connected
 	IsConnected() bool

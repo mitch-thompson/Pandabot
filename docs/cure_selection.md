@@ -12,6 +12,8 @@ The selection of a cure spell level follows these primary steps:
         *   **Caster Level Determination**: The system maintains a mapping of all the caster's job levels (e.g., `{"WHM": 75, "BLM": 37}`). When evaluating a spell, it checks if any of the caster's jobs meet or exceed the required level for that specific spell in the registry. This allows the bot to seamlessly use spells available from both the main job and subjob.
         *   **Data Source**: This information is retrieved in real-time from the game client's state. When the bot receives a status update, it extracts the current job and level, updates its internal mapping, and passes this via the `ClientInterface` to the selector within a `CastContext`.
     *   **Spell Type**: Only spells categorized as `Healing` (with "Cure" or "Curaga" prefix) or specific `BlueMagic` healing spells (`Wild Carrot`, `Magic Fruit`, `Healing Breeze`) are evaluated.
+    *   **Tier Filtering (n-2 Rule)**: To prevent casting inefficiently low-level spells, the system identifies the highest available tier of "Cure" or "Curaga" for the current job level. It then filters out any spells that are more than 2 tiers below this maximum (e.g., if Cure V is available, only Cure III, IV, and V are considered).
+        *   This rule can be disabled by setting `is_powerleveling = true` in `config.toml`.
     *   **Recast Timers**: Spells currently on recast are not considered. The system tracks recast timers internally (based on base values) and synchronizes with real-time data from the game client via status updates.
 
 2.  **Selection Modes**:
@@ -54,6 +56,7 @@ The following thresholds can be adjusted in `config.toml`:
 - **`health_thresholds.critical`** (Default: 25): The HP percentage below which a party member is in critical condition.
 - **`health_thresholds.low`** (Default: 50): The HP percentage below which a party member is in low health condition.
 - **`curaga_threshold_count`** (Default: 3): The minimum number of party members needing healing to trigger a Curaga evaluation.
+- **`is_powerleveling`** (Default: false): When set to true, disables the n-2 tier filtering rule, allowing all available tiers of cure spells to be used.
 
 #### Internal Thresholds (Hardcoded)
 

@@ -11,6 +11,7 @@ import (
 	"PandaBot/internal/action"
 	"PandaBot/internal/entity"
 	"PandaBot/internal/protocol"
+	"PandaBot/internal/statusMonitor"
 )
 
 // ServerClientAdapter adapts the existing server client to work with the casting engine
@@ -37,6 +38,9 @@ type ServerClientAdapter struct {
 
 	// Ready for action tracking
 	readyForActionChan chan struct{}
+
+	// Status Monitor reference
+	statusMonitor *statusMonitor.StatusMonitor
 
 	// executionMu ensures only one command is being processed (checked or sent) at a time
 	executionMu sync.Mutex
@@ -131,6 +135,10 @@ func (sca *ServerClientAdapter) GetClientInfo() *ClientInfo {
 }
 
 // IsConnected implements ClientInterface
+func (sca *ServerClientAdapter) GetStatusMonitor() *statusMonitor.StatusMonitor {
+	return sca.statusMonitor
+}
+
 func (sca *ServerClientAdapter) IsConnected() bool {
 	sca.mu.RLock()
 	defer sca.mu.RUnlock()
@@ -325,11 +333,12 @@ func NewCastingServerIntegration() *CastingServerIntegration {
 }
 
 // RegisterClient registers a new client connection with the casting system
-func (csi *CastingServerIntegration) RegisterClient(conn net.Conn, playerName string) {
+func (csi *CastingServerIntegration) RegisterClient(conn net.Conn, playerName string, sm *statusMonitor.StatusMonitor) {
 	csi.adaptersMu.Lock()
 	defer csi.adaptersMu.Unlock()
 
 	adapter := NewServerClientAdapter(conn, playerName)
+	adapter.statusMonitor = sm
 	csi.clientAdapters[conn] = adapter
 
 	// Use a stable ID that doesn't change even if playerName is updated

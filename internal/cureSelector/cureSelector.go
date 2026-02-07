@@ -337,7 +337,47 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 	var options []*CureOption
 	// log.Printf("[DEBUG] Evaluating cure options for available MP: %d", availableMP)
 
+	cfg := config.Get()
+	maxTier := 0
+	tierMap := map[string]int{
+		"Cure":     1,
+		"Cure II":  2,
+		"Cure III": 3,
+		"Cure IV":  4,
+		"Cure V":   5,
+		"Cure VI":  6,
+	}
+
 	allSpells := registry.GetAllSpells()
+
+	// First pass: find highest available tier
+	if !cfg.IsPowerleveling {
+		for _, s := range allSpells {
+			if s.Type != spell.Healing || !strings.HasPrefix(s.English, "Cure") {
+				continue
+			}
+
+			tier, ok := tierMap[s.English]
+			if !ok {
+				continue
+			}
+
+			canCast := false
+			for job, level := range jobLevel {
+				if requiredLevel, exists := s.LevelReq[job]; exists {
+					if level >= requiredLevel {
+						canCast = true
+						break
+					}
+				}
+			}
+
+			if canCast && tier > maxTier {
+				maxTier = tier
+			}
+		}
+	}
+
 	for _, s := range allSpells {
 		if s.Type != spell.Healing && s.Type != spell.BlueMagic {
 			continue
@@ -349,6 +389,14 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 
 		if s.Type == spell.BlueMagic && s.English != "Wild Carrot" && s.English != "Magic Fruit" {
 			continue
+		}
+
+		// Apply tier filtering for Cure spells
+		if !cfg.IsPowerleveling && s.Type == spell.Healing && strings.HasPrefix(s.English, "Cure") {
+			tier, ok := tierMap[s.English]
+			if ok && tier < maxTier-2 {
+				continue
+			}
 		}
 
 		// Check recast
@@ -394,7 +442,46 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[string]int, p *player.Player) []*CureOption {
 	var options []*CureOption
 
+	cfg := config.Get()
+	maxTier := 0
+	tierMap := map[string]int{
+		"Curaga":     1,
+		"Curaga II":  2,
+		"Curaga III": 3,
+		"Curaga IV":  4,
+		"Curaga V":   5,
+	}
+
 	allSpells := registry.GetAllSpells()
+
+	// First pass: find highest available tier
+	if !cfg.IsPowerleveling {
+		for _, s := range allSpells {
+			if s.Type != spell.Healing || !strings.HasPrefix(s.English, "Curaga") {
+				continue
+			}
+
+			tier, ok := tierMap[s.English]
+			if !ok {
+				continue
+			}
+
+			canCast := false
+			for job, level := range jobLevel {
+				if requiredLevel, exists := s.LevelReq[job]; exists {
+					if level >= requiredLevel {
+						canCast = true
+						break
+					}
+				}
+			}
+
+			if canCast && tier > maxTier {
+				maxTier = tier
+			}
+		}
+	}
+
 	for _, s := range allSpells {
 		if s.Type != spell.Healing && s.Type != spell.BlueMagic {
 			continue
@@ -406,6 +493,14 @@ func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[
 
 		if s.Type == spell.BlueMagic && s.English != "Healing Breeze" {
 			continue
+		}
+
+		// Apply tier filtering for Curaga spells
+		if !cfg.IsPowerleveling && s.Type == spell.Healing && strings.HasPrefix(s.English, "Curaga") {
+			tier, ok := tierMap[s.English]
+			if ok && tier < maxTier-2 {
+				continue
+			}
 		}
 
 		// Check recast

@@ -13,6 +13,7 @@ type Config struct {
 	CureThreshold    int  `toml:"cure_threshold_percent"`
 	CuragaThreshold  int  `toml:"curaga_threshold_count"`
 	NaRemovalEnabled bool `toml:"na_removal_enabled"`
+	IsPowerleveling  bool `toml:"is_powerleveling"`
 	HealthThresholds struct {
 		Critical int `toml:"critical"`
 		Low      int `toml:"low"`
@@ -50,6 +51,7 @@ var defaultConfig = `
 cure_threshold_percent = 70
 curaga_threshold_count = 3
 na_removal_enabled = true
+is_powerleveling = false
 
 [health_thresholds]
 critical = 25
