@@ -15,6 +15,7 @@ type TriggerService struct {
 	castingSystem   *casting.CastingServerIntegration
 	entityService   *entityService.EntityService
 	buffToStatusMap map[string]int
+	disableCures    *bool
 }
 
 // NewTriggerService creates a new trigger service
@@ -24,6 +25,11 @@ func NewTriggerService(castingSystem *casting.CastingServerIntegration) *Trigger
 		entityService:   entityService.NewEntityService(),
 		buffToStatusMap: statusMonitor.GetBuffToStatusMap(),
 	}
+}
+
+// SetDisableCuresPtr wires the shared DisableCures flag from the server
+func (ts *TriggerService) SetDisableCuresPtr(flag *bool) {
+	ts.disableCures = flag
 }
 
 // RouteTriggerEvents routes trigger events to the centralized casting system
@@ -59,6 +65,18 @@ func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerE
 				sm.ClearDesiredBuffs()
 			}
 			continue
+		}
+
+		// If cures are disabled, skip healing and status-removal triggers entirely
+		if ts.disableCures != nil && *ts.disableCures {
+			// healing-related triggers to ignore when disabled
+			switch triggerEvent.TriggerType {
+			case "heal", "cure", "help", "erase", "cursna", "viruna", "doom",
+				"stoned", "paralyzed", "silenced", "poisoned", "blinded", "cursed", "diseased", "plagued",
+				"devotion":
+				log.Printf("DisableCures active: ignoring trigger event %s from %s", triggerEvent.TriggerType, triggerEvent.Sender)
+				continue
+			}
 		}
 
 		// Register buff for monitoring if it's a known buff

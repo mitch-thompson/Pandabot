@@ -15,6 +15,7 @@ type AutoActionService struct {
 	castingSystem *casting.CastingServerIntegration
 	PLSource      *string
 	PLTarget      *string
+	DisableCures  *bool
 }
 
 // NewAutoActionService creates a new auto action service
@@ -28,7 +29,12 @@ func NewAutoActionService(castingSystem *casting.CastingServerIntegration) *Auto
 func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMonitor.StatusMonitor) (*protocol.ExecuteCommand, string, error) {
 	// 0. Power Leveling Mode logic
 	if aas.PLSource != nil && *aas.PLSource == playerName {
-		return nil, "Power Leveling Mode: Source player is not casting", nil
+		// In PL mode, the source player (being power leveled) should ideally only send data.
+		// If DisableCures is explicitly true, we definitely don't cast cures/na.
+		// If it's NOT true, we currently stop everything.
+		if aas.DisableCures == nil || !*aas.DisableCures {
+			return nil, "Power Leveling Mode: Source player is not casting", nil
+		}
 	}
 
 	for _, statusID := range sm.PlayerStatus {
@@ -45,7 +51,9 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 	partyMap := sm.GetAllPartyMembers()
 
 	// If this is the PL target, consider the PL source's party members
+	isPL := false
 	if aas.PLTarget != nil && *aas.PLTarget == playerName && aas.PLSource != nil && *aas.PLSource != "" {
+		isPL = true
 		sourceClient := aas.findClientByName(*aas.PLSource)
 		if sourceClient != nil {
 			sourceSM := sourceClient.GetStatusMonitor()
@@ -79,9 +87,11 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 	}
 
 	criticalMembers := make([]*statusMonitor.PartyMember, 0)
-	for _, member := range partyMap {
-		if sm.GetHealthThreshold(member.HPPercent) == "critical" {
-			criticalMembers = append(criticalMembers, member)
+	if aas.DisableCures == nil || !*aas.DisableCures {
+		for _, member := range partyMap {
+			if sm.GetHealthThreshold(member.HPPercent) == "critical" {
+				criticalMembers = append(criticalMembers, member)
+			}
 		}
 	}
 
@@ -107,6 +117,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 			TargetEntity:    targetEntity,
 			PartyMembers:    partyEntities,
 			PartySize:       len(partyEntities),
+			IsPowerleveling: isPL,
 		})
 
 		if err == nil {
@@ -117,48 +128,55 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 	}
 
 	sleptMembers := make([]string, 0)
-	for _, member := range partyMap {
-		for _, statusID := range member.StatusIDs {
-			if statusID == 2 {
-				sleptMembers = append(sleptMembers, member.Name)
-				break
+	if aas.DisableCures == nil || !*aas.DisableCures {
+		for _, member := range partyMap {
+			for _, statusID := range member.StatusIDs {
+				if statusID == 2 {
+					sleptMembers = append(sleptMembers, member.Name)
+					break
+				}
 			}
 		}
 	}
 
-	if len(sleptMembers) > 1 {
+	if len(sleptMembers) > 1 && !isPL {
 		return &protocol.ExecuteCommand{
 			Command: fmt.Sprintf("/ma \"Curaga\" %s", sleptMembers[0]),
 		}, fmt.Sprintf("Waking up multiple members: %v", sleptMembers), nil
-	} else if len(sleptMembers) == 1 {
+	} else if len(sleptMembers) >= 1 {
 		return &protocol.ExecuteCommand{
 			Command: fmt.Sprintf("/ma \"Cure\" %s", sleptMembers[0]),
 		}, fmt.Sprintf("Waking up member: %s", sleptMembers[0]), nil
 	}
 
-	for _, member := range partyMap {
-		effect := sm.GetMostSevereStatusEffect(member)
-		if effect != nil && effect.Severity >= 3 {
-			spellName := effect.NaSpell
-			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaAction(&casting.CastContext{
-				CasterMP:        clientInfo.MP,
-				CasterJobLevels: clientInfo.JobLevels,
-				StatusEffects:   member.StatusIDs,
-			}); err == nil && opt != nil {
-				spellName = opt.GetName()
-			}
+	if aas.DisableCures == nil || !*aas.DisableCures {
+		for _, member := range partyMap {
+			effect := sm.GetMostSevereStatusEffect(member)
+			if effect != nil && effect.Severity >= 3 {
+				spellName := effect.NaSpell
+				if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaAction(&casting.CastContext{
+					CasterMP:        clientInfo.MP,
+					CasterJobLevels: clientInfo.JobLevels,
+					StatusEffects:   member.StatusIDs,
+					IsPowerleveling: isPL,
+				}); err == nil && opt != nil {
+					spellName = opt.GetName()
+				}
 
-			return &protocol.ExecuteCommand{
-				Command: fmt.Sprintf("/ma \"%s\" %s", spellName, member.Name),
-			}, fmt.Sprintf("High priority debuff: %s on %s", effect.Name, member.Name), nil
+				return &protocol.ExecuteCommand{
+					Command: fmt.Sprintf("/ma \"%s\" %s", spellName, member.Name),
+				}, fmt.Sprintf("High priority debuff: %s on %s", effect.Name, member.Name), nil
+			}
 		}
 	}
 
 	// 4. Mid priority cures? (Low threshold)
 	lowHPMembers := make([]*statusMonitor.PartyMember, 0)
-	for _, member := range partyMap {
-		if sm.GetHealthThreshold(member.HPPercent) == "low" {
-			lowHPMembers = append(lowHPMembers, member)
+	if aas.DisableCures == nil || !*aas.DisableCures {
+		for _, member := range partyMap {
+			if sm.GetHealthThreshold(member.HPPercent) == "low" {
+				lowHPMembers = append(lowHPMembers, member)
+			}
 		}
 	}
 
@@ -185,6 +203,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 			TargetEntity:    targetEntity,
 			PartyMembers:    partyEntities,
 			PartySize:       len(partyEntities),
+			IsPowerleveling: isPL,
 		})
 
 		if err == nil {
@@ -217,6 +236,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 					CasterMP:        clientInfo.MP,
 					CasterJobLevels: clientInfo.JobLevels,
 					PartySize:       sm.GetPartyCount(),
+					IsPowerleveling: isPL,
 				}); err == nil {
 					spellName = opt.SpellName
 				}
@@ -225,6 +245,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 					CasterMP:        clientInfo.MP,
 					CasterJobLevels: clientInfo.JobLevels,
 					PartySize:       sm.GetPartyCount(),
+					IsPowerleveling: isPL,
 				}); err == nil {
 					spellName = opt.SpellName
 				}
@@ -232,7 +253,8 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 
 			// Check if this spell is TargetSelf
 			if resolvedTarget, err := aas.castingSystem.GetCastingEngine().ResolveActionTarget(spellName, member.Name, &casting.CastContext{
-				CasterName: playerName,
+				CasterName:      playerName,
+				IsPowerleveling: isPL,
 			}); err == nil && (resolvedTarget == playerName || resolvedTarget == "<me>") {
 				// For TargetSelf spells, we monitor the caster
 				if caster, exists := partyMap[playerName]; exists {
@@ -291,6 +313,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 				CasterMP:        clientInfo.MP,
 				CasterJobLevels: clientInfo.JobLevels,
 				PartySize:       sm.GetPartyCount(),
+				IsPowerleveling: isPL,
 			}); err == nil {
 				spellName = opt.SpellName
 			}
@@ -299,6 +322,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 				CasterMP:        clientInfo.MP,
 				CasterJobLevels: clientInfo.JobLevels,
 				PartySize:       sm.GetPartyCount(),
+				IsPowerleveling: isPL,
 			}); err == nil {
 				spellName = opt.SpellName
 			}
@@ -306,7 +330,8 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 
 		// Re-resolve target based on the final spell name (handles TargetSelf, etc.)
 		if resolvedTarget, err := aas.castingSystem.GetCastingEngine().ResolveActionTarget(spellName, target, &casting.CastContext{
-			CasterName: "<me>", // autoActionService always assumes caster is <me> for command generation
+			CasterName:      "<me>", // autoActionService always assumes caster is <me> for command generation
+			IsPowerleveling: isPL,
 		}); err == nil {
 			target = resolvedTarget
 		}
@@ -317,20 +342,23 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 	}
 
 	// 6. Low priority debuffs to remove? (Severity 2)
-	for _, member := range partyMap {
-		effect := sm.GetMostSevereStatusEffect(member)
-		if effect != nil && effect.Severity == 2 {
-			spellName := effect.NaSpell
-			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaAction(&casting.CastContext{
-				CasterMP:        clientInfo.MP,
-				CasterJobLevels: clientInfo.JobLevels,
-				StatusEffects:   member.StatusIDs,
-			}); err == nil && opt != nil {
-				spellName = opt.GetName()
+	if aas.DisableCures == nil || !*aas.DisableCures {
+		for _, member := range partyMap {
+			effect := sm.GetMostSevereStatusEffect(member)
+			if effect != nil && effect.Severity == 2 {
+				spellName := effect.NaSpell
+				if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaAction(&casting.CastContext{
+					CasterMP:        clientInfo.MP,
+					CasterJobLevels: clientInfo.JobLevels,
+					StatusEffects:   member.StatusIDs,
+					IsPowerleveling: isPL,
+				}); err == nil && opt != nil {
+					spellName = opt.GetName()
+				}
+				return &protocol.ExecuteCommand{
+					Command: fmt.Sprintf("/ma \"%s\" %s", spellName, member.Name),
+				}, fmt.Sprintf("Low priority debuff: %s on %s", effect.Name, member.Name), nil
 			}
-			return &protocol.ExecuteCommand{
-				Command: fmt.Sprintf("/ma \"%s\" %s", spellName, member.Name),
-			}, fmt.Sprintf("Low priority debuff: %s on %s", effect.Name, member.Name), nil
 		}
 	}
 

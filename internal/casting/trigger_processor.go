@@ -67,7 +67,7 @@ func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender strin
 		}
 		requestIDs = append(requestIDs, requestID)
 
-	case triggerType == "silenced":
+	case triggerType == "silenced" || triggerType == "silence" || triggerType == "silena":
 		requestID, err := tp.processNaTrigger("Silena", sender, priority, context, getUniqueNano(seq))
 		seq++
 		if err != nil {

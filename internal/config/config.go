@@ -1,87 +1,47 @@
 package config
 
-import (
-	"log/slog"
-	"os"
-	"sync/atomic"
+// Opinionated defaults for PandaBot
+const (
+	DefaultPort            = 31337
+	CureThresholdPercent   = 70
+	CuragaThresholdCount   = 3
+	NaRemovalEnabled       = true
+	DisableCuresDefault    = false
+	IsPowerlevelingDefault = false
 
-	"github.com/fsnotify/fsnotify"
-	"github.com/pelletier/go-toml/v2"
+	HealthThresholdCritical = 25
+	HealthThresholdLow      = 75
 )
 
+// Config holds the opinionated settings
 type Config struct {
-	CureThreshold    int  `toml:"cure_threshold_percent"`
-	CuragaThreshold  int  `toml:"curaga_threshold_count"`
-	NaRemovalEnabled bool `toml:"na_removal_enabled"`
-	IsPowerleveling  bool `toml:"is_powerleveling"`
+	Port             int
+	CureThreshold    int
+	CuragaThreshold  int
+	NaRemovalEnabled bool
+	DisableCures     bool
+	IsPowerleveling  bool
 	HealthThresholds struct {
-		Critical int `toml:"critical"`
-		Low      int `toml:"low"`
-	} `toml:"health_thresholds"`
+		Critical int
+		Low      int
+	}
 }
 
-var active atomic.Value
-
-func init() {
-	Load()
-	go watch()
-}
-
+// Get returns the opinionated configuration
 func Get() *Config {
-	return active.Load().(*Config)
-}
-
-func Load() {
-	data, err := os.ReadFile("config.toml")
-	if err != nil {
-		slog.Error("failed to read config.toml, using defaults", "err", err)
-		data = []byte(defaultConfig)
-	}
-
-	var cfg Config
-	if err := toml.Unmarshal(data, &cfg); err != nil {
-		slog.Error("invalid TOML, using defaults", "err", err)
-		data = []byte(defaultConfig)
-	}
-	active.Store(&cfg)
-	slog.Info("config loaded")
-}
-
-var defaultConfig = `
-cure_threshold_percent = 70
-curaga_threshold_count = 3
-na_removal_enabled = true
-is_powerleveling = false
-
-[health_thresholds]
-critical = 25
-low = 75
-`
-
-func watch() {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		slog.Error("fsnotify failed", "err", err)
-		return
-	}
-	defer watcher.Close()
-
-	if err := watcher.Add("config.toml"); err != nil {
-		if err := watcher.Add("./config.toml"); err != nil {
-			slog.Error("cannot watch config.toml", "err", err)
-			return
-		}
-	}
-
-	for {
-		select {
-		case event := <-watcher.Events:
-			if event.Op&fsnotify.Write == fsnotify.Write {
-				slog.Info("config file changed, reloading...")
-				Load()
-			}
-		case err := <-watcher.Errors:
-			slog.Error("fsnotify error", "err", err)
-		}
+	return &Config{
+		Port:             DefaultPort,
+		CureThreshold:    CureThresholdPercent,
+		CuragaThreshold:  CuragaThresholdCount,
+		NaRemovalEnabled: NaRemovalEnabled,
+		DisableCures:     DisableCuresDefault,
+		IsPowerleveling:  IsPowerlevelingDefault,
+		HealthThresholds: struct {
+			Critical int
+			Low      int
+		}{
+			Critical: HealthThresholdCritical,
+			Low:      HealthThresholdLow,
+		},
 	}
 }

@@ -13,6 +13,7 @@ var (
 	parensPattern   = regexp.MustCompile(`^\((?P<sender>[a-zA-Z]+)\)\s*(?P<msg>.*)$`)
 	bracketsPattern = regexp.MustCompile(`^\[(?P<sender>[a-zA-Z]+)\]\s*(?P<msg>.*)$`)
 	colonPattern    = regexp.MustCompile(`^(?P<sender>[^:]+):\s*(?P<msg>.*)$`)
+	tellPattern     = regexp.MustCompile(`^(?P<sender>[a-zA-Z]+)\s*>>\s*(?P<msg>.*)$`)
 )
 
 // TriggerEvent represents a generic trigger event detected in chat
@@ -106,6 +107,12 @@ func (tp *TextParser) ParseMessage(chatLine *protocol.ChatLine) ([]TriggerEvent,
 		if extractedSender, extractedMsg, ok := tp.extractSender(effectiveMessage); ok {
 			effectiveSender = extractedSender
 			effectiveMessage = extractedMsg
+		} else if chatLine.Mode == 13 || chatLine.Mode == 14 {
+			// For tells, if we can't extract a sender from message,
+			// and sender is Unknown, it's likely a direct tell where the sender
+			// field should have been populated by the client, but if it wasn't,
+			// we can't do much without the sender name.
+			// However, in some cases the sender is the only one who could have sent it.
 		}
 	}
 
@@ -150,7 +157,7 @@ func (tp *TextParser) ParseMessage(chatLine *protocol.ChatLine) ([]TriggerEvent,
 
 // extractSender attempts to extract the sender name and actual message from a composite message
 func (tp *TextParser) extractSender(message string) (string, string, bool) {
-	patterns := []*regexp.Regexp{parensPattern, bracketsPattern, colonPattern}
+	patterns := []*regexp.Regexp{parensPattern, bracketsPattern, tellPattern, colonPattern}
 
 	for _, pattern := range patterns {
 		matches := pattern.FindStringSubmatch(message)

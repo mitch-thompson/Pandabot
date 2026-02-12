@@ -57,6 +57,7 @@ The following thresholds can be adjusted in `config.toml`:
 - **`health_thresholds.low`** (Default: 50): The HP percentage below which a party member is in low health condition.
 - **`curaga_threshold_count`** (Default: 3): The minimum number of party members needing healing to trigger a Curaga evaluation.
 - **`is_powerleveling`** (Default: false): When set to true, disables the n-2 tier filtering rule, allowing all available tiers of cure spells to be used.
+- **`disable_cures`** (Default: false): When set to true, prevents the bot from automatically casting any Cure or status removal spells. This can be toggled in-game using "disable cures" and "enable cures" commands.
 
 #### Internal Thresholds (Hardcoded)
 

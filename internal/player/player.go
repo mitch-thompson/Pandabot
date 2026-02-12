@@ -19,8 +19,9 @@ type Player struct {
 }
 
 func (p *Player) CanCast(spellName string) bool {
-	if p.AvailableSpells == nil {
-		return false
+	// If we don't have any known-spell data yet, do not block selection
+	if len(p.AvailableSpells) == 0 {
+		return true
 	}
 	s, ok := p.AvailableSpells[spellName]
 	if !ok {
@@ -33,11 +34,7 @@ func (p *Player) CanCast(spellName string) bool {
 	if !exists {
 		return true
 	}
-	isReady := time.Now().After(ready)
-	if !isReady {
-		// log.Printf("[DEBUG] CanCast(%s) ID:%d - NOT READY until %v (now: %v)", spellName, s.ID, ready, time.Now())
-	}
-	return isReady
+	return time.Now().After(ready)
 }
 
 func (p *Player) SetSpellRecast(spellID uint16, readyAt time.Time) {

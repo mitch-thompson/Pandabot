@@ -56,10 +56,11 @@ type Server struct {
 	config *Config
 
 	// State
-	running  bool
-	stopChan chan struct{}
-	PLSource string // Name of the player who sent "power level"
-	PLTarget string // Name of the player who received "power level"
+	running      bool
+	stopChan     chan struct{}
+	PLSource     string // Name of the player who sent "power level"
+	PLTarget     string // Name of the player who received "power level"
+	DisableCures bool   // If true, cures and na spells are disabled
 }
 
 const MaxCommandQueueSize = 100
@@ -141,6 +142,9 @@ func NewServer(config *Config) *Server {
 	}
 	aas.PLSource = &s.PLSource
 	aas.PLTarget = &s.PLTarget
+	aas.DisableCures = &s.DisableCures
+	// Wire DisableCures into trigger service so chat-triggered heals are suppressed when active
+	s.triggerService.SetDisableCuresPtr(&s.DisableCures)
 	return s
 }
 
@@ -148,7 +152,7 @@ func NewServer(config *Config) *Server {
 func DefaultConfig() *Config {
 	cfg := config.Get()
 	return &Config{
-		Port:                 31337,
+		Port:                 cfg.Port,
 		StatusUpdateInterval: 5 * time.Second,
 		ClientTimeout:        30 * time.Second,
 		MaxClients:           10,
@@ -163,19 +167,28 @@ func DefaultConfig() *Config {
 
 func (s *Server) UpdateFromConfig() {
 	cfg := config.Get()
-	s.config.HealthThresholds.Critical = cfg.HealthThresholds.Critical
-	s.config.HealthThresholds.Low = cfg.HealthThresholds.Low
-	s.config.HealthThresholds.Medium = cfg.CureThreshold
-
 	s.statusMonitor.SetHealthThresholds(
-		s.config.HealthThresholds.Critical,
-		s.config.HealthThresholds.Low,
-		s.config.HealthThresholds.Medium,
+		cfg.HealthThresholds.Critical,
+		cfg.HealthThresholds.Low,
+		cfg.CureThreshold,
 	)
 
 	// Ensure casting engine has player reference
 	if s.castingSystem != nil && s.castingSystem.GetCastingEngine() != nil {
 		s.castingSystem.GetCastingEngine().Player = s.Player
+	}
+
+	// Update auto action service with current defaults
+	if s.autoActionService != nil {
+		s.autoActionService.DisableCures = &s.DisableCures
+	}
+
+	// Update cure selector with current defaults
+	if s.cureSelector != nil {
+		s.cureSelector.SetConfig(cureSelector.Config{
+			CuragaThreshold: cfg.CuragaThreshold,
+			IsPowerleveling: cfg.IsPowerleveling,
+		})
 	}
 }
 
@@ -499,7 +512,7 @@ func (s *Server) handleChatMessage(client *Client, parts []string) {
 	}
 
 	if len(triggerEvents) > 0 {
-		log.Printf("Chat triggers detected from %s: %v", sender, triggerEvents)
+		log.Printf("Chat triggers detected from %s (msg: %s): %v", sender, message, triggerEvents)
 
 		// Route trigger events to centralized casting system
 		s.triggerService.RouteTriggerEvents(triggerEvents, s.statusMonitor)
@@ -841,7 +854,7 @@ func (s *Server) handleJSONChatMessage(client *Client, msg *protocol.Message) {
 	}
 
 	if len(triggerEvents) > 0 {
-		log.Printf("Chat triggers detected from %s: %v", chat.Sender, triggerEvents)
+		log.Printf("Chat triggers detected from %s (msg: %s): %v", chat.Sender, chat.Message, triggerEvents)
 
 		// Route trigger events to centralized casting system
 		s.triggerService.RouteTriggerEvents(triggerEvents, s.statusMonitor)
@@ -862,6 +875,16 @@ func (s *Server) handleJSONChatMessage(client *Client, msg *protocol.Message) {
 			s.PLTarget = ""
 			log.Printf("POWER LEVELING MODE DISABLED by %s", chat.Sender)
 		}
+	}
+
+	if strings.Contains(strings.ToLower(chat.Message), "disable cures") {
+		s.DisableCures = true
+		log.Printf("CURES DISABLED by %s", chat.Sender)
+	}
+
+	if strings.Contains(strings.ToLower(chat.Message), "enable cures") {
+		s.DisableCures = false
+		log.Printf("CURES ENABLED by %s", chat.Sender)
 	}
 }
 
@@ -1002,6 +1025,7 @@ func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interfac
 		hpActualFloat, _ := member["HPActual"].(float64)
 		mpActualFloat, _ := member["MPActual"].(float64)
 		jobFloat, _ := member["Job"].(float64)
+		jobLevelFloat, _ := member["JobLevel"].(float64)
 		memberZoneFloat, _ := member["Zone"].(float64)
 
 		hpPercent := int(hpPercentFloat)
@@ -1009,6 +1033,7 @@ func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interfac
 		hpActual := int(hpActualFloat)
 		mpActual := int(mpActualFloat)
 		job := int(jobFloat)
+		jobLevel := int(jobLevelFloat)
 		memberZone := int(memberZoneFloat)
 
 		// Calculate max values
@@ -1087,9 +1112,10 @@ func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interfac
 
 			// Update MP and job levels
 			jobName := getJobNameFromID(job)
-			// Placeholder level 75; update if levels available in protocol.
-			// Current Lua addon doesn't explicitly send player level in this JSON structure.
-			jobLevels := map[string]int{jobName: 75}
+			jobLevels := map[string]int{jobName: jobLevel}
+			if jobLevel <= 0 {
+				jobLevels[jobName] = 75 // Fallback if level not provided
+			}
 
 			// Extract known spells and abilities if present
 			var knownSpells []string

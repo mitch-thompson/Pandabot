@@ -12,6 +12,17 @@ import (
 	"sync"
 )
 
+// Config holds settings for cure selection
+type Config struct {
+	CuragaThreshold int
+	IsPowerleveling bool
+}
+
+var DefaultConfig = Config{
+	CuragaThreshold: 3,
+	IsPowerleveling: false,
+}
+
 // CureOption represents a cure spell option with its effectiveness metrics
 type CureOption struct {
 	SpellName      string
@@ -26,16 +37,30 @@ type CureOption struct {
 
 // CureSelector handles optimal cure spell selection
 type CureSelector struct {
-	mu sync.RWMutex
+	mu     sync.RWMutex
+	config Config
 }
 
 // NewCureSelector creates a new cure selector
 func NewCureSelector() *CureSelector {
-	return &CureSelector{}
+	cfg := config.Get()
+	return &CureSelector{
+		config: Config{
+			CuragaThreshold: cfg.CuragaThreshold,
+			IsPowerleveling: cfg.IsPowerleveling,
+		},
+	}
+}
+
+// SetConfig updates the cure selector's configuration
+func (cs *CureSelector) SetConfig(cfg Config) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.config = cfg
 }
 
 // SelectOptimalCure determines the best cure spell for a given situation using urgency-weighted HP/MP efficiency
-func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int, prioritizeEfficiency bool, p *player.Player) (*CureOption, error) {
+func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int, prioritizeEfficiency bool, p *player.Player, isPowerleveling bool) (*CureOption, error) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -80,7 +105,7 @@ func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []
 	}
 
 	// Evaluate Curaga options
-	if len(partyMembers) >= config.Get().CuragaThreshold {
+	if !cs.config.IsPowerleveling && len(partyMembers) >= cs.config.CuragaThreshold {
 		for _, option := range availableCuragaOptions {
 			totalEffectiveHeal := 0.0
 			for _, member := range partyMembers {
@@ -263,7 +288,7 @@ func (cs *CureSelector) ShouldUseCuraga(partyMembers []*entity.Entity, available
 		}
 	}
 
-	if membersNeedingHealing >= config.Get().CuragaThreshold {
+	if membersNeedingHealing >= cs.config.CuragaThreshold {
 		availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel, p)
 		if len(availableCuragaOptions) == 0 {
 			return false, nil, fmt.Errorf("no curaga spells available with current MP and job levels")
@@ -337,7 +362,6 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 	var options []*CureOption
 	// log.Printf("[DEBUG] Evaluating cure options for available MP: %d", availableMP)
 
-	cfg := config.Get()
 	maxTier := 0
 	tierMap := map[string]int{
 		"Cure":     1,
@@ -351,7 +375,7 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 	allSpells := registry.GetAllSpells()
 
 	// First pass: find highest available tier
-	if !cfg.IsPowerleveling {
+	if !cs.config.IsPowerleveling {
 		for _, s := range allSpells {
 			if s.Type != spell.Healing || !strings.HasPrefix(s.English, "Cure") {
 				continue
@@ -392,7 +416,7 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 		}
 
 		// Apply tier filtering for Cure spells
-		if !cfg.IsPowerleveling && s.Type == spell.Healing && strings.HasPrefix(s.English, "Cure") {
+		if !cs.config.IsPowerleveling && s.Type == spell.Healing && strings.HasPrefix(s.English, "Cure") {
 			tier, ok := tierMap[s.English]
 			if ok && tier < maxTier-2 {
 				continue
@@ -442,7 +466,6 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[string]int, p *player.Player) []*CureOption {
 	var options []*CureOption
 
-	cfg := config.Get()
 	maxTier := 0
 	tierMap := map[string]int{
 		"Curaga":     1,
@@ -455,7 +478,7 @@ func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[
 	allSpells := registry.GetAllSpells()
 
 	// First pass: find highest available tier
-	if !cfg.IsPowerleveling {
+	if !cs.config.IsPowerleveling {
 		for _, s := range allSpells {
 			if s.Type != spell.Healing || !strings.HasPrefix(s.English, "Curaga") {
 				continue
@@ -496,7 +519,7 @@ func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[
 		}
 
 		// Apply tier filtering for Curaga spells
-		if !cfg.IsPowerleveling && s.Type == spell.Healing && strings.HasPrefix(s.English, "Curaga") {
+		if !cs.config.IsPowerleveling && s.Type == spell.Healing && strings.HasPrefix(s.English, "Curaga") {
 			tier, ok := tierMap[s.English]
 			if ok && tier < maxTier-2 {
 				continue

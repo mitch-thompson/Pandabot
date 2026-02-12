@@ -28,3 +28,14 @@ Once activated:
     -   If the requesting client is the `PLSource`, it returns no action.
     -   If the requesting client is the `PLTarget`, it retrieves the `StatusMonitor` from the `PLSource`'s client and merges their party members into the local healing consideration loop.
 -   **Status Monitoring:** Each client now has its own `StatusMonitor` instance to accurately track its local party's state, which is shared via the server for PL mode.
+
+#### Disable Cures Command
+To prevent a character from casting Cures or status removal ("-na") spells, use the following commands:
+-   **Disable Cures:** Send a chat message or tell containing "disable cures".
+-   **Enable Cures:** Send a chat message or tell containing "enable cures".
+
+When "Disable Cures" is active, the bot will skip all automatic Cure and status removal actions. 
+
+**Behavior in PL Mode:**
+- If "Disable Cures" is **NOT** active (default), the PL Source (person being leveled) will stop all automatic actions.
+- If "Disable Cures" **IS** active, the PL Source will be allowed to perform other automatic actions (like buffs or nukes) but will still skip Cures and status removals. This allows the power-leveled character to contribute to combat while letting the power-leveler handle all healing.

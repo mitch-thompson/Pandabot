@@ -90,6 +90,7 @@ type CastContext struct {
 	BuffType        string // For buff casting
 	MissingHP       int    // For cure casting
 	OriginalTarget  string // Original target for sequences
+	IsPowerleveling bool   // Whether PL mode is active
 }
 
 // ActiveCast tracks an ongoing casting operation
@@ -510,6 +511,7 @@ func (ce *CastingEngine) selectOptimalCure(context *CastContext) (*cureSelector.
 			context.CasterJobLevels,
 			prioritizeEfficiency,
 			context.Player,
+			context.IsPowerleveling,
 		)
 
 		if err != nil {
@@ -548,6 +550,7 @@ func (ce *CastingEngine) selectOptimalBuffs(context *CastContext) ([]action.Acti
 		availableMP,
 		context.PartySize,
 		context.Player,
+		context.IsPowerleveling,
 	)
 	if err != nil {
 		return nil, err
@@ -578,6 +581,7 @@ func (ce *CastingEngine) selectOptimalProtect(context *CastContext) (*buffSelect
 		availableMP,
 		context.PartySize,
 		context.Player,
+		context.IsPowerleveling,
 	)
 }
 
@@ -593,6 +597,7 @@ func (ce *CastingEngine) selectOptimalShell(context *CastContext) (*buffSelector
 		availableMP,
 		context.PartySize,
 		context.Player,
+		context.IsPowerleveling,
 	)
 }
 

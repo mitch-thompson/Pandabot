@@ -12,7 +12,6 @@ import (
 
 func main() {
 	config := server.DefaultConfig()
-	config.Port = 31337
 	srv := server.NewServer(config)
 
 	go func() {

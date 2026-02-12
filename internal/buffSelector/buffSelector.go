@@ -78,18 +78,19 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 }
 
 // SelectOptimalProtect selects the best Protect spell based on job levels and party size
-func (bs *BuffSelector) SelectOptimalProtect(jobLevels map[string]int, availableMP int, partySize int, p *player.Player) (*BuffOption, error) {
-	return bs.selectOptimalProtectInternal(jobLevels, availableMP, partySize, false, p)
+func (bs *BuffSelector) SelectOptimalProtect(jobLevels map[string]int, availableMP int, partySize int, p *player.Player, isPowerleveling bool) (*BuffOption, error) {
+	return bs.selectOptimalProtectInternal(jobLevels, availableMP, partySize, false, p, isPowerleveling)
 }
 
 // selectOptimalProtectInternal is the internal implementation with fallback control
-func (bs *BuffSelector) selectOptimalProtectInternal(jobLevels map[string]int, availableMP int, partySize int, fallbackAttempt bool, p *player.Player) (*BuffOption, error) {
+func (bs *BuffSelector) selectOptimalProtectInternal(jobLevels map[string]int, availableMP int, partySize int, fallbackAttempt bool, p *player.Player, isPowerleveling bool) (*BuffOption, error) {
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
 
 	// Prefer area spells for party of 3 or more, OR if player is WHM (WHMs should always use area spells when available)
 	// But if this is a fallback attempt, force single target preference
-	preferArea := !fallbackAttempt && (partySize >= 3 || jobLevels["WHM"] > 0)
+	// ALSO: skip area spells in Power Leveling mode
+	preferArea := !fallbackAttempt && !isPowerleveling && (partySize >= 3 || jobLevels["WHM"] > 0)
 	var bestOption *BuffOption
 	bestLevel := 0
 
@@ -146,7 +147,7 @@ func (bs *BuffSelector) selectOptimalProtectInternal(jobLevels map[string]int, a
 
 	// If no area spell found but we prefer area, try single target (but only once)
 	if bestOption == nil && preferArea && !fallbackAttempt {
-		return bs.selectOptimalProtectInternal(jobLevels, availableMP, partySize, true, p)
+		return bs.selectOptimalProtectInternal(jobLevels, availableMP, partySize, true, p, isPowerleveling)
 	}
 
 	if bestOption == nil {
@@ -157,18 +158,19 @@ func (bs *BuffSelector) selectOptimalProtectInternal(jobLevels map[string]int, a
 }
 
 // SelectOptimalShell selects the best Shell spell based on job levels and party size
-func (bs *BuffSelector) SelectOptimalShell(jobLevels map[string]int, availableMP int, partySize int, p *player.Player) (*BuffOption, error) {
-	return bs.selectOptimalShellInternal(jobLevels, availableMP, partySize, false, p)
+func (bs *BuffSelector) SelectOptimalShell(jobLevels map[string]int, availableMP int, partySize int, p *player.Player, isPowerleveling bool) (*BuffOption, error) {
+	return bs.selectOptimalShellInternal(jobLevels, availableMP, partySize, false, p, isPowerleveling)
 }
 
 // selectOptimalShellInternal is the internal implementation with fallback control
-func (bs *BuffSelector) selectOptimalShellInternal(jobLevels map[string]int, availableMP int, partySize int, fallbackAttempt bool, p *player.Player) (*BuffOption, error) {
+func (bs *BuffSelector) selectOptimalShellInternal(jobLevels map[string]int, availableMP int, partySize int, fallbackAttempt bool, p *player.Player, isPowerleveling bool) (*BuffOption, error) {
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
 
 	// Prefer area spells for party of 3 or more, OR if player is WHM (WHMs should always use area spells when available)
 	// But if this is a fallback attempt, force single target preference
-	preferArea := !fallbackAttempt && (partySize >= 3 || jobLevels["WHM"] > 0)
+	// ALSO: skip area spells in Power Leveling mode
+	preferArea := !fallbackAttempt && !isPowerleveling && (partySize >= 3 || jobLevels["WHM"] > 0)
 
 	var bestOption *BuffOption
 	bestLevel := 0
@@ -226,7 +228,7 @@ func (bs *BuffSelector) selectOptimalShellInternal(jobLevels map[string]int, ava
 
 	// If no area spell found but we prefer area, try single target (but only once)
 	if bestOption == nil && preferArea && !fallbackAttempt {
-		return bs.selectOptimalShellInternal(jobLevels, availableMP, partySize, true, p)
+		return bs.selectOptimalShellInternal(jobLevels, availableMP, partySize, true, p, isPowerleveling)
 	}
 
 	if bestOption == nil {
@@ -297,21 +299,21 @@ func (bs *BuffSelector) SelectBarSpell(element string, jobLevels map[string]int,
 }
 
 // GetOptimalBuffSequence returns the optimal sequence of buff spells for firebuffs, etc.
-func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[string]int, availableMP int, partySize int, p *player.Player) ([]*BuffOption, error) {
+func (bs *BuffSelector) GetOptimalBuffSequence(buffType string, jobLevels map[string]int, availableMP int, partySize int, p *player.Player, isPowerleveling bool) ([]*BuffOption, error) {
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
 
 	var sequence []*BuffOption
 
 	// Get Protect spell
-	protectOption, err := bs.SelectOptimalProtect(jobLevels, availableMP, partySize, p)
+	protectOption, err := bs.SelectOptimalProtect(jobLevels, availableMP, partySize, p, isPowerleveling)
 	if err == nil && protectOption != nil {
 		sequence = append(sequence, protectOption)
 		availableMP -= protectOption.MPCost
 	}
 
 	// Get Shell spell
-	shellOption, err := bs.SelectOptimalShell(jobLevels, availableMP, partySize, p)
+	shellOption, err := bs.SelectOptimalShell(jobLevels, availableMP, partySize, p, isPowerleveling)
 	if err == nil && shellOption != nil {
 		sequence = append(sequence, shellOption)
 		availableMP -= shellOption.MPCost
