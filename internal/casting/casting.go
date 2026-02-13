@@ -9,6 +9,7 @@ import (
 
 	"PandaBot/internal/action"
 	"PandaBot/internal/buffSelector"
+	"PandaBot/internal/config"
 	"PandaBot/internal/cureSelector"
 	"PandaBot/internal/entity"
 	"PandaBot/internal/naSelector"
@@ -46,6 +47,7 @@ type CastingConfig struct {
 	PriorityThresholds map[string]int
 	MPReservation      int           // MP to keep in reserve
 	SequenceDelay      time.Duration // Delay between spells in a sequence
+	IsPowerleveling    bool          // Whether PL mode is active
 }
 
 // CastRequest represents a request to execute an action
@@ -156,6 +158,7 @@ func NewCastingEngine(config *CastingConfig) *CastingEngine {
 
 // DefaultCastingConfig returns default configuration
 func DefaultCastingConfig() *CastingConfig {
+	cfg := config.Get()
 	return &CastingConfig{
 		DefaultTimeout:     30 * time.Second,
 		MaxConcurrentCasts: 1,
@@ -167,8 +170,9 @@ func DefaultCastingConfig() *CastingConfig {
 			"medium":   5,
 			"low":      3,
 		},
-		MPReservation: 0,                      // Keep 50 MP in reserve
-		SequenceDelay: 500 * time.Millisecond, // Reduced since we check if ready
+		MPReservation:   0,                      // Keep 50 MP in reserve
+		SequenceDelay:   500 * time.Millisecond, // Reduced since we check if ready
+		IsPowerleveling: cfg.IsPowerleveling,
 	}
 }
 
@@ -526,6 +530,7 @@ func (ce *CastingEngine) selectOptimalCure(context *CastContext) (*cureSelector.
 			availableMP,
 			context.CasterJobLevels,
 			context.Player,
+			context.IsPowerleveling,
 		)
 
 		if err != nil {

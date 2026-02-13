@@ -40,6 +40,7 @@ func (ch *CastingHelper) CastCure(target string, targetEntity *entity.Entity, ca
 			CasterJobLevels: jobLevels,
 			CasterName:      casterName,
 			TargetEntity:    targetEntity,
+			IsPowerleveling: ch.engine.config.IsPowerleveling,
 		},
 	}
 
@@ -71,6 +72,7 @@ func (ch *CastingHelper) CastCureByDamage(target string, missingHP int, casterMP
 			MissingHP:       missingHP,
 			PartyMembers:    partyMembers,
 			PartySize:       len(partyMembers),
+			IsPowerleveling: ch.engine.config.IsPowerleveling,
 		},
 	}
 
@@ -99,6 +101,7 @@ func (ch *CastingHelper) CastBuffs(target string, buffType string, casterMP int,
 			CasterName:      casterName,
 			PartySize:       partySize,
 			BuffType:        buffType,
+			IsPowerleveling: ch.engine.config.IsPowerleveling,
 		},
 	}
 
@@ -126,6 +129,7 @@ func (ch *CastingHelper) CastNaSpell(target string, statusEffects []int, casterM
 			CasterJobLevels: jobLevels,
 			CasterName:      casterName,
 			StatusEffects:   statusEffects,
+			IsPowerleveling: ch.engine.config.IsPowerleveling,
 		},
 	}
 
@@ -293,7 +297,7 @@ func (ch *CastingHelper) CastPartyCures(partyMembers []*entity.Entity, casterMP 
 		}
 
 		selector := cureSelector.NewCureSelector()
-		useCuraga, curagaOption, err := selector.ShouldUseCuraga(injured, availableMP, jobLevels, ch.engine.Player)
+		useCuraga, curagaOption, err := selector.ShouldUseCuraga(injured, availableMP, jobLevels, ch.engine.Player, ch.engine.config.IsPowerleveling)
 		if err == nil && useCuraga && curagaOption != nil {
 			// Cast curaga on the caster (self-target spell)
 			casterName := ch.getCasterName()

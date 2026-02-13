@@ -213,6 +213,47 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		}
 	}
 
+	// 4.5 Sublimation logic (SCH only)
+	isSCH := clientInfo.JobLevels["SCH"] > 0
+	if isSCH {
+		hasRefresh := false
+		hasSubActivated := false
+		hasSubComplete := false
+		for _, id := range sm.PlayerStatus {
+			if id == 43 { // Refresh
+				hasRefresh = true
+			}
+			if id == 187 { // Sublimation: Activated
+				hasSubActivated = true
+			}
+			if id == 188 { // Sublimation: Complete
+				hasSubComplete = true
+			}
+		}
+
+		// - If we don't currently have refresh we should use sublimation (and it's not already active)
+		if !hasRefresh && !hasSubActivated && !hasSubComplete {
+			return &protocol.ExecuteCommand{
+				Command: "/ja \"Sublimation\" <me>",
+			}, "Sublimation: No Refresh", nil
+		}
+
+		// - When sublimation is full and we are missing mp we should use sublimation
+		if hasSubComplete && clientInfo.MP < 100 { // Heuristic: Missing some MP. ClientInfo doesn't have MaxMP currently.
+			return &protocol.ExecuteCommand{
+				Command: "/ja \"Sublimation\" <me>",
+			}, "Sublimation: Releasing full charge", nil
+		}
+
+		// - When we are less than 10% mp we should use sublimation if we have it up
+		// We don't have MPPercent in ClientInfo, but we can assume MP < 50-100 is low for a SCH
+		if clientInfo.MP < 50 && (hasSubActivated || hasSubComplete) {
+			return &protocol.ExecuteCommand{
+				Command: "/ja \"Sublimation\" <me>",
+			}, "Sublimation: Emergency MP recovery", nil
+		}
+	}
+
 	// 5. Missing desired buffs? (sorted by priority)
 	var missingBuffs []struct {
 		member *statusMonitor.PartyMember

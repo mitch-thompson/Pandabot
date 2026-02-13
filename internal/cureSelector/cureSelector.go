@@ -81,10 +81,10 @@ func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []
 	targetUrgency := float64(missingHP) / float64(maxHP)
 
 	// Get available single-target cure options
-	availableCureOptions := cs.getAvailableCureOptions(availableMP, jobLevel, p)
+	availableCureOptions := cs.getAvailableCureOptions(availableMP, jobLevel, p, isPowerleveling)
 
 	// Get available Curaga options
-	availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel, p)
+	availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel, p, isPowerleveling)
 
 	var bestOption *CureOption
 	maxWeightedEfficiency := -1.0
@@ -105,7 +105,7 @@ func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []
 	}
 
 	// Evaluate Curaga options
-	if !cs.config.IsPowerleveling && len(partyMembers) >= cs.config.CuragaThreshold {
+	if !isPowerleveling && len(partyMembers) >= cs.config.CuragaThreshold {
 		for _, option := range availableCuragaOptions {
 			totalEffectiveHeal := 0.0
 			for _, member := range partyMembers {
@@ -147,7 +147,7 @@ func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []
 }
 
 // SelectCureByDamage selects cure spell based on missing HP amount
-func (cs *CureSelector) SelectCureByDamage(missingHP int, availableMP int, jobLevel map[string]int, p *player.Player) (*CureOption, error) {
+func (cs *CureSelector) SelectCureByDamage(missingHP int, availableMP int, jobLevel map[string]int, p *player.Player, isPowerleveling bool) (*CureOption, error) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -155,7 +155,7 @@ func (cs *CureSelector) SelectCureByDamage(missingHP int, availableMP int, jobLe
 		return nil, fmt.Errorf("no healing needed")
 	}
 
-	availableOptions := cs.getAvailableCureOptions(availableMP, jobLevel, p)
+	availableOptions := cs.getAvailableCureOptions(availableMP, jobLevel, p, isPowerleveling)
 
 	if len(availableOptions) == 0 {
 		return nil, fmt.Errorf("no cure spells available")
@@ -227,15 +227,15 @@ func (cs *CureSelector) GetCureSpellInfo(spellName string) (*spell.Spell, error)
 }
 
 // GetAllCureOptions returns all available cure options for given constraints
-func (cs *CureSelector) GetAllCureOptions(availableMP int, jobLevel map[string]int, p *player.Player) ([]*CureOption, error) {
+func (cs *CureSelector) GetAllCureOptions(availableMP int, jobLevel map[string]int, p *player.Player, isPowerleveling bool) ([]*CureOption, error) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
-	return cs.getAvailableCureOptions(availableMP, jobLevel, p), nil
+	return cs.getAvailableCureOptions(availableMP, jobLevel, p, isPowerleveling), nil
 }
 
 // SelectCuragaForMultipleTargets selects appropriate curaga spell when more than 3 party members need healing
-func (cs *CureSelector) SelectCuragaForMultipleTargets(partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int, p *player.Player) (*CureOption, error) {
+func (cs *CureSelector) SelectCuragaForMultipleTargets(partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int, p *player.Player, isPowerleveling bool) (*CureOption, error) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -259,7 +259,7 @@ func (cs *CureSelector) SelectCuragaForMultipleTargets(partyMembers []*entity.En
 
 	averageMissingHP := totalMissingHP / membersNeedingHealing
 
-	availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel, p)
+	availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel, p, isPowerleveling)
 	if len(availableCuragaOptions) == 0 {
 		return nil, fmt.Errorf("no curaga spells available with current MP and job levels")
 	}
@@ -269,7 +269,7 @@ func (cs *CureSelector) SelectCuragaForMultipleTargets(partyMembers []*entity.En
 }
 
 // ShouldUseCuraga determines if curaga is more efficient than individual cures
-func (cs *CureSelector) ShouldUseCuraga(partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int, p *player.Player) (bool, *CureOption, error) {
+func (cs *CureSelector) ShouldUseCuraga(partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int, p *player.Player, isPowerleveling bool) (bool, *CureOption, error) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -289,7 +289,7 @@ func (cs *CureSelector) ShouldUseCuraga(partyMembers []*entity.Entity, available
 	}
 
 	if membersNeedingHealing >= cs.config.CuragaThreshold {
-		availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel, p)
+		availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel, p, isPowerleveling)
 		if len(availableCuragaOptions) == 0 {
 			return false, nil, fmt.Errorf("no curaga spells available with current MP and job levels")
 		}
@@ -308,7 +308,7 @@ func (cs *CureSelector) ShouldUseCuraga(partyMembers []*entity.Entity, available
 			return false, nil, fmt.Errorf("no suitable curaga option found")
 		}
 
-		singleOptions := cs.getAvailableCureOptions(availableMP, jobLevel, p)
+		singleOptions := cs.getAvailableCureOptions(availableMP, jobLevel, p, isPowerleveling)
 		if len(singleOptions) == 0 {
 			// If we can't cast any single-target cures but can cast curaga, prefer curaga
 			return true, bestCuraga, nil
@@ -358,7 +358,7 @@ func (cs *CureSelector) calculateMissingHP(target *entity.Entity) int {
 	return 0
 }
 
-func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[string]int, p *player.Player) []*CureOption {
+func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[string]int, p *player.Player, isPowerleveling bool) []*CureOption {
 	var options []*CureOption
 	// log.Printf("[DEBUG] Evaluating cure options for available MP: %d", availableMP)
 
@@ -375,7 +375,7 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 	allSpells := registry.GetAllSpells()
 
 	// First pass: find highest available tier
-	if !cs.config.IsPowerleveling {
+	if !isPowerleveling {
 		for _, s := range allSpells {
 			if s.Type != spell.Healing || !strings.HasPrefix(s.English, "Cure") {
 				continue
@@ -416,7 +416,7 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 		}
 
 		// Apply tier filtering for Cure spells
-		if !cs.config.IsPowerleveling && s.Type == spell.Healing && strings.HasPrefix(s.English, "Cure") {
+		if !isPowerleveling && s.Type == spell.Healing && strings.HasPrefix(s.English, "Cure") {
 			tier, ok := tierMap[s.English]
 			if ok && tier < maxTier-2 {
 				continue
@@ -463,7 +463,7 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 	return options
 }
 
-func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[string]int, p *player.Player) []*CureOption {
+func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[string]int, p *player.Player, isPowerleveling bool) []*CureOption {
 	var options []*CureOption
 
 	maxTier := 0
@@ -478,7 +478,7 @@ func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[
 	allSpells := registry.GetAllSpells()
 
 	// First pass: find highest available tier
-	if !cs.config.IsPowerleveling {
+	if !isPowerleveling {
 		for _, s := range allSpells {
 			if s.Type != spell.Healing || !strings.HasPrefix(s.English, "Curaga") {
 				continue
@@ -519,7 +519,7 @@ func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[
 		}
 
 		// Apply tier filtering for Curaga spells
-		if !cs.config.IsPowerleveling && s.Type == spell.Healing && strings.HasPrefix(s.English, "Curaga") {
+		if !isPowerleveling && s.Type == spell.Healing && strings.HasPrefix(s.English, "Curaga") {
 			tier, ok := tierMap[s.English]
 			if ok && tier < maxTier-2 {
 				continue
