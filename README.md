@@ -40,6 +40,27 @@ Alternatively, you can find pre-built binaries in the GitHub Releases if availab
    ```
 4. The addon will connect to the server (default: `127.0.0.1:31337`).
 
+### Trigger Actions
+
+PandaBot responds to specific chat triggers from party members or via direct tells.
+
+| Category | Triggers | Description |
+|----------|----------|-------------|
+| **Control** | `panda clear` | Clears all tracked buffs for everyone. |
+| | `panda clear <name>` | Clears tracked buffs for a specific player. |
+| | `panda clear <spell>` | Clears a specific tracked buff (e.g., `panda clear haste`). |
+| | `panda` | Clears the current casting queue and all tracked buffs. |
+| **System** | `power level` | Enters Power Leveling mode (sent via tell to the bot). |
+| | `stop pl` | Disables Power Leveling mode. |
+| | `disable cures` | Suspends all automatic healing and status removal. |
+| | `enable cures` | Resumes automatic healing and status removal. |
+| **Healing** | `heal`, `cure`, `help` | Casts the optimal Cure based on missing HP. |
+| **Status** | `erase`, `paralyzed`, `silenced`, etc. | Removes the specified status effect. |
+| **Buffs** | `haste`, `regen`, `protect`, `shell` | Applies the requested buff. |
+| | `solace`, `misery`, `lightarts`, `darkarts` | Switches stance or uses job-specific buffs. |
+
+For a complete list of triggers, see [Trigger Actions Documentation](docs/trigger_actions.md).
+
 ### Documentation
 
 Detailed documentation for specific features can be found in the `docs/` folder:
