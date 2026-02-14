@@ -80,6 +80,7 @@ func (tp *TextParser) initializeDefaultTriggers() {
 	tp.triggerMap["misery"] = 5
 	tp.triggerMap["lightarts"] = 5
 	tp.triggerMap["darkarts"] = 5
+	tp.triggerMap["refresh"] = 6
 
 	// Healing triggers
 	tp.triggerMap["heal"] = 9
@@ -144,6 +145,17 @@ func (tp *TextParser) ParseMessage(chatLine *protocol.ChatLine) ([]TriggerEvent,
 							// For now, just capture it as Arg
 							event.Arg = words[i+1]
 						}
+					}
+				}
+			}
+
+			// Special handling for "refresh" with potential target
+			if trigger == "refresh" {
+				words := strings.Fields(normalizedMessage)
+				for i, word := range words {
+					if strings.ToLower(word) == "refresh" && i+1 < len(words) {
+						// Capture next word as target name
+						event.Arg = words[i+1]
 					}
 				}
 			}

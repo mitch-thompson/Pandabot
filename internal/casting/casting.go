@@ -77,6 +77,7 @@ const (
 	CastTypeWhmPrep                  // WHM preparation sequence
 	CastTypeReraise                  // Auto-selected Reraise action
 	CastTypeRegen                    // Auto-selected Regen action
+	CastTypeRefresh                  // Auto-selected Refresh action
 )
 
 // CastContext provides context for spell selection and casting
@@ -426,6 +427,18 @@ func (ce *CastingEngine) resolveActionSelection(activeCast *ActiveCast) error {
 		}
 		request.Action = s
 
+	case CastTypeRefresh:
+		// Select optimal Refresh action
+		refreshOption, err := ce.buffSelector.SelectOptimalRefresh(context.CasterJobLevels, context.CasterMP, context.Player)
+		if err != nil {
+			return fmt.Errorf("refresh selection failed: %v", err)
+		}
+		s, err := registry.GetSpell(refreshOption.SpellName)
+		if err != nil {
+			return err
+		}
+		request.Action = s
+
 	case CastTypeWhmPrep:
 		whmSequence := []action.Actionable{}
 
@@ -716,6 +729,7 @@ func (ce *CastingEngine) selectOptimalNaSpell(context *CastContext) (action.Acti
 	naOption, err := ce.naSelector.SelectOptimalNaSpell(
 		context.StatusEffects,
 		availableMP,
+		context.CasterJobLevels,
 		context.Player,
 	)
 	if err != nil {
@@ -1147,6 +1161,15 @@ func (ce *CastingEngine) SelectOptimalRegen(jobLevels map[string]int, availableM
 	}
 
 	return ce.buffSelector.SelectOptimalRegen(jobLevels, availableMP, p)
+}
+
+func (ce *CastingEngine) SelectOptimalRefresh(jobLevels map[string]int, availableMP int, p *player.Player) (*buffSelector.BuffOption, error) {
+	availableMP = availableMP - ce.config.MPReservation
+	if availableMP <= 0 {
+		return nil, fmt.Errorf("insufficient MP for Refresh")
+	}
+
+	return ce.buffSelector.SelectOptimalRefresh(jobLevels, availableMP, p)
 }
 
 func (ce *CastingEngine) GetStats() map[string]interface{} {

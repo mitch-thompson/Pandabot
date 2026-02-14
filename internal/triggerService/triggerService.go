@@ -15,7 +15,6 @@ type TriggerService struct {
 	castingSystem   *casting.CastingServerIntegration
 	entityService   *entityService.EntityService
 	buffToStatusMap map[string]int
-	disableCures    *bool
 }
 
 // NewTriggerService creates a new trigger service
@@ -27,13 +26,8 @@ func NewTriggerService(castingSystem *casting.CastingServerIntegration) *Trigger
 	}
 }
 
-// SetDisableCuresPtr wires the shared DisableCures flag from the server
-func (ts *TriggerService) SetDisableCuresPtr(flag *bool) {
-	ts.disableCures = flag
-}
-
 // RouteTriggerEvents routes trigger events to the centralized casting system
-func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerEvent, sm *statusMonitor.StatusMonitor) {
+func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerEvent, sm *statusMonitor.StatusMonitor, disableCures bool, plSource string, plTarget string) {
 	// Get current party members from status monitor
 	partyMembers := sm.GetAllPartyMembers()
 
@@ -68,7 +62,7 @@ func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerE
 		}
 
 		// If cures are disabled, skip healing and status-removal triggers entirely
-		if ts.disableCures != nil && *ts.disableCures {
+		if disableCures {
 			// healing-related triggers to ignore when disabled
 			switch triggerEvent.TriggerType {
 			case "heal", "cure", "help", "erase", "cursna", "viruna", "doom",
@@ -83,6 +77,9 @@ func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerE
 		if statusID, ok := ts.buffToStatusMap[triggerEvent.TriggerType]; ok {
 			// Some buffs are always self-buffs
 			target := triggerEvent.Sender
+			if triggerEvent.Arg != "" {
+				target = triggerEvent.Arg
+			}
 			priority := 50 // Default priority
 			if triggerEvent.TriggerType == "light arts" || triggerEvent.TriggerType == "lightarts" ||
 				triggerEvent.TriggerType == "dark arts" || triggerEvent.TriggerType == "darkarts" ||
@@ -93,6 +90,8 @@ func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerE
 				priority = 90
 			} else if triggerEvent.TriggerType == "regen" {
 				priority = 40 // Regen usually lower priority than basic buffs
+			} else if triggerEvent.TriggerType == "refresh" {
+				priority = 60
 			}
 			sm.RegisterDesiredBuff(target, statusID, triggerEvent.TriggerType, priority, time.Time{})
 		}
@@ -115,8 +114,8 @@ func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerE
 			// If it's a WHM-enabled buff sequence, also register WHM prep buffs
 			// These are always self-buffs, so they should target the sender (who requested the buffs)
 			// autoActionService will handle redirecting these to <me> for monitoring.
-			//sm.RegisterDesiredBuff(triggerEvent.Sender, 358, "Light Arts", 80, time.Time{}) todo
-			//sm.RegisterDesiredBuff(triggerEvent.Sender, 417, "Afflatus Solace", 80, time.Time{}) todo
+			sm.RegisterDesiredBuff(triggerEvent.Sender, 358, "Light Arts", 80, time.Time{})
+			sm.RegisterDesiredBuff(triggerEvent.Sender, 417, "Afflatus Solace", 80, time.Time{})
 			sm.RegisterDesiredBuff(triggerEvent.Sender, 113, "reraise", 90, time.Time{})
 			sm.RegisterDesiredBuff(triggerEvent.Sender, 272, "Auspice", 75, time.Time{})
 		}
@@ -124,6 +123,7 @@ func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerE
 		requestIDs := ts.castingSystem.ProcessTriggerEvent(
 			triggerEvent.TriggerType,
 			triggerEvent.Sender,
+			triggerEvent.Arg,
 			triggerEvent.Priority,
 			entityMembers,
 		)

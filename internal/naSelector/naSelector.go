@@ -147,7 +147,7 @@ func (ns *NaSpellSelector) PrioritizeStatusEffects(statusEffects []int) ([]int, 
 }
 
 // SelectOptimalNaSpell chooses the best "na" spell for given status effects and constraints
-func (ns *NaSpellSelector) SelectOptimalNaSpell(statusEffects []int, availableMP int, p *player.Player) (*NaSpellOption, error) {
+func (ns *NaSpellSelector) SelectOptimalNaSpell(statusEffects []int, availableMP int, jobLevels map[string]int, p *player.Player) (*NaSpellOption, error) {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
 
@@ -160,6 +160,23 @@ func (ns *NaSpellSelector) SelectOptimalNaSpell(statusEffects []int, availableMP
 	for _, option := range ns.naSpellMap {
 		if int(option.Spell.MPCost) > availableMP {
 			continue // Can't afford this spell
+		}
+
+		// Check job level requirements
+		hasLevel := false
+		if len(option.Spell.LevelReq) == 0 {
+			hasLevel = true // No level requirement (rare for spells, but for safety)
+		} else {
+			for job, reqLevel := range option.Spell.LevelReq {
+				if currentLevel, exists := jobLevels[job]; exists && currentLevel >= reqLevel {
+					hasLevel = true
+					break
+				}
+			}
+		}
+
+		if !hasLevel {
+			continue
 		}
 
 		// Check recast

@@ -42,12 +42,15 @@ type ServerClientAdapter struct {
 	// Status Monitor reference
 	statusMonitor *statusMonitor.StatusMonitor
 
+	// Engine reference
+	engine *CastingEngine
+
 	// executionMu ensures only one command is being processed (checked or sent) at a time
 	executionMu sync.Mutex
 }
 
 // NewServerClientAdapter creates a new adapter for an existing server client
-func NewServerClientAdapter(conn net.Conn, playerName string) *ServerClientAdapter {
+func NewServerClientAdapter(conn net.Conn, playerName string, engine *CastingEngine) *ServerClientAdapter {
 	return &ServerClientAdapter{
 		conn:               conn,
 		playerName:         playerName,
@@ -59,6 +62,7 @@ func NewServerClientAdapter(conn net.Conn, playerName string) *ServerClientAdapt
 		pendingCommands:    make(map[string]*ActionCommand),
 		readyChecks:        make(map[string]chan *protocol.ReadyResponse),
 		readyForActionChan: make(chan struct{}, 10), // Buffered to prevent blocking client loop
+		engine:             engine,
 	}
 }
 
@@ -159,6 +163,26 @@ func (sca *ServerClientAdapter) WaitForReadyForAction(timeout time.Duration) err
 	case <-time.After(timeout):
 		return fmt.Errorf("timeout waiting for ready for action signal")
 	}
+}
+
+// CanUseAbility implements ClientInterface
+func (sca *ServerClientAdapter) CanUseAbility(abilityName string) bool {
+	sca.mu.RLock()
+	defer sca.mu.RUnlock()
+
+	// Check if known first
+	if len(sca.knownAbilities) > 0 {
+		if _, ok := sca.knownAbilities[abilityName]; !ok {
+			return false
+		}
+	}
+
+	// Use the engine's player object to check recasts if available
+	if sca.engine != nil && sca.engine.Player != nil {
+		return sca.engine.Player.CanUseAbility(abilityName)
+	}
+
+	return true // Fallback to true if we can't check
 }
 
 // LockExecution implements ClientInterface
@@ -337,7 +361,7 @@ func (csi *CastingServerIntegration) RegisterClient(conn net.Conn, playerName st
 	csi.adaptersMu.Lock()
 	defer csi.adaptersMu.Unlock()
 
-	adapter := NewServerClientAdapter(conn, playerName)
+	adapter := NewServerClientAdapter(conn, playerName, csi.engine)
 	adapter.statusMonitor = sm
 	csi.clientAdapters[conn] = adapter
 
@@ -451,7 +475,7 @@ func (csi *CastingServerIntegration) GetTriggerProcessor() *TriggerProcessor {
 }
 
 // ProcessTriggerEvent processes a trigger event using the centralized casting system
-func (csi *CastingServerIntegration) ProcessTriggerEvent(triggerType string, sender string, priority int, partyMembers []*entity.Entity) []string {
+func (csi *CastingServerIntegration) ProcessTriggerEvent(triggerType string, sender string, arg string, priority int, partyMembers []*entity.Entity) []string {
 	// Get a connected client to determine available MP and job levels
 	connectedClients := csi.clientManager.GetConnectedClients()
 	if len(connectedClients) == 0 {
@@ -478,6 +502,7 @@ func (csi *CastingServerIntegration) ProcessTriggerEvent(triggerType string, sen
 	requestIDs, err := csi.triggerProcessor.ProcessTriggerEvent(
 		triggerType,
 		sender,
+		arg,
 		priority,
 		clientInfo.PlayerName,
 		clientInfo.MP,

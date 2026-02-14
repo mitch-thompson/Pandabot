@@ -28,6 +28,7 @@ type BuffSelector struct {
 	shellSpells   []*spell.Spell
 	barSpells     []*spell.Spell
 	regenSpells   []*spell.Spell
+	refreshSpells []*spell.Spell
 	mu            sync.RWMutex
 }
 
@@ -39,6 +40,7 @@ func NewBuffSelector() *BuffSelector {
 		shellSpells:   make([]*spell.Spell, 0),
 		barSpells:     make([]*spell.Spell, 0),
 		regenSpells:   make([]*spell.Spell, 0),
+		refreshSpells: make([]*spell.Spell, 0),
 	}
 
 	// Initialize with default buff spells
@@ -53,6 +55,7 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 	bs.shellSpells = make([]*spell.Spell, 0)
 	bs.barSpells = make([]*spell.Spell, 0)
 	bs.regenSpells = make([]*spell.Spell, 0)
+	bs.refreshSpells = make([]*spell.Spell, 0)
 
 	allSpells := registry.GetAllSpells()
 
@@ -73,6 +76,8 @@ func (bs *BuffSelector) initializeDefaultBuffSpells() {
 			bs.barSpells = append(bs.barSpells, buffSpell)
 		} else if strings.HasPrefix(name, "Regen") {
 			bs.regenSpells = append(bs.regenSpells, buffSpell)
+		} else if strings.HasPrefix(name, "Refresh") {
+			bs.refreshSpells = append(bs.refreshSpells, buffSpell)
 		}
 	}
 }
@@ -468,6 +473,56 @@ func (bs *BuffSelector) SelectOptimalRegen(jobLevels map[string]int, availableMP
 
 	if bestOption == nil {
 		return nil, fmt.Errorf("no Regen spell available")
+	}
+
+	return bestOption, nil
+}
+
+// SelectOptimalRefresh selects the highest Refresh spell available
+func (bs *BuffSelector) SelectOptimalRefresh(jobLevels map[string]int, availableMP int, p *player.Player) (*BuffOption, error) {
+	bs.mu.RLock()
+	defer bs.mu.RUnlock()
+
+	var bestOption *BuffOption
+	bestPriority := -1
+
+	for _, spellObj := range bs.refreshSpells {
+		// Check recast
+		if p != nil && !p.CanCast(spellObj.English) {
+			continue
+		}
+
+		// Check MP requirement
+		if int(spellObj.MPCost) > availableMP {
+			continue
+		}
+
+		// Check job level requirement
+		canCast := false
+		for job, level := range jobLevels {
+			if requiredLevel, exists := spellObj.LevelReq[job]; exists {
+				if level >= requiredLevel {
+					canCast = true
+					break
+				}
+			}
+		}
+
+		if canCast && spellObj.Priority > bestPriority {
+			bestPriority = spellObj.Priority
+			bestOption = &BuffOption{
+				SpellName:   spellObj.English,
+				Spell:       spellObj,
+				MPCost:      int(spellObj.MPCost),
+				CastTime:    spellObj.CastTime,
+				Efficiency:  1.0 / float64(spellObj.MPCost),
+				IsAreaSpell: false,
+			}
+		}
+	}
+
+	if bestOption == nil {
+		return nil, fmt.Errorf("no Refresh spell available")
 	}
 
 	return bestOption, nil

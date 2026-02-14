@@ -133,6 +133,9 @@ func initializeSpells() {
 		{English: "Regen III", ID: 110, MPCost: 64, CastTime: 2.0, Type: spell.Enhancing, Element: spell.Light, Targets: action.TargetAlly, Priority: 3, LevelReq: map[string]int{"WHM": 66, "SCH": 80}},
 		{English: "Regen IV", ID: 477, MPCost: 82, CastTime: 2.0, Type: spell.Enhancing, Element: spell.Light, Targets: action.TargetAlly, Priority: 4, LevelReq: map[string]int{"WHM": 86}},
 		{English: "Regen V", ID: 478, MPCost: 100, CastTime: 2.0, Type: spell.Enhancing, Element: spell.Light, Targets: action.TargetAlly, Priority: 5, LevelReq: map[string]int{"WHM": 99}},
+		{English: "Refresh", ID: 111, MPCost: 40, CastTime: 5.0, Recast: 10.0, Type: spell.Enhancing, Element: spell.Light, Targets: action.TargetAlly, Priority: 1, LevelReq: map[string]int{"RDM": 41}},
+		{English: "Refresh II", ID: 112, MPCost: 80, CastTime: 5.0, Recast: 10.0, Type: spell.Enhancing, Element: spell.Light, Targets: action.TargetAlly, Priority: 2, LevelReq: map[string]int{"RDM": 82}},
+		{English: "Refresh III", ID: 894, MPCost: 120, CastTime: 5.0, Recast: 10.0, Type: spell.Enhancing, Element: spell.Light, Targets: action.TargetAlly, Priority: 3, LevelReq: map[string]int{"RDM": 96}},
 
 		// Blue Magic Healing
 		{English: "Healing Breeze", ID: 581, MPCost: 55, CastTime: 4.5, Type: spell.BlueMagic, Element: spell.Wind, Targets: action.TargetSelf | action.TargetAoE, Priority: 1, HealAmount: 155, LevelReq: map[string]int{"BLU": 16}},

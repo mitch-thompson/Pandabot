@@ -56,11 +56,8 @@ type Server struct {
 	config *Config
 
 	// State
-	running      bool
-	stopChan     chan struct{}
-	PLSource     string // Name of the player who sent "power level"
-	PLTarget     string // Name of the player who received "power level"
-	DisableCures bool   // If true, cures and na spells are disabled
+	running  bool
+	stopChan chan struct{}
 }
 
 const MaxCommandQueueSize = 100
@@ -91,12 +88,15 @@ type QueuedCommand struct {
 
 // Client represents a connected Lua addon client
 type Client struct {
-	conn        net.Conn
-	reader      *bufio.Reader
-	writer      *bufio.Writer
-	lastSeen    time.Time
-	playerName  string // Name of the player running this client
-	currentZone string // Current zone ID for the client
+	conn         net.Conn
+	reader       *bufio.Reader
+	writer       *bufio.Writer
+	lastSeen     time.Time
+	playerName   string // Name of the player running this client
+	currentZone  string // Current zone ID for the client
+	DisableCures bool   // If true, cures and na spells are disabled
+	PLSource     string // Name of the player who sent "power level" for this character
+	PLTarget     string // Name of the player who received "power level" for this character
 
 	// Command queue management
 	commandQueue   []*QueuedCommand
@@ -140,11 +140,6 @@ func NewServer(config *Config) *Server {
 		config:            config,
 		stopChan:          make(chan struct{}),
 	}
-	aas.PLSource = &s.PLSource
-	aas.PLTarget = &s.PLTarget
-	aas.DisableCures = &s.DisableCures
-	// Wire DisableCures into trigger service so chat-triggered heals are suppressed when active
-	s.triggerService.SetDisableCuresPtr(&s.DisableCures)
 	return s
 }
 
@@ -180,7 +175,6 @@ func (s *Server) UpdateFromConfig() {
 
 	// Update auto action service with current defaults
 	if s.autoActionService != nil {
-		s.autoActionService.DisableCures = &s.DisableCures
 	}
 
 	// Update cure selector with current defaults
@@ -515,7 +509,9 @@ func (s *Server) handleChatMessage(client *Client, parts []string) {
 		log.Printf("Chat triggers detected from %s (msg: %s): %v", sender, message, triggerEvents)
 
 		// Route trigger events to centralized casting system
-		s.triggerService.RouteTriggerEvents(triggerEvents, s.statusMonitor)
+		// Note: handleChatMessage is legacy and doesn't have a direct client context easily available
+		// but we can try to find the client if needed. For now, using false and empty PL.
+		s.triggerService.RouteTriggerEvents(triggerEvents, s.statusMonitor, false, "", "")
 	}
 }
 
@@ -775,7 +771,7 @@ func (s *Server) handleJSONReadyForAction(client *Client, msg *protocol.Message)
 	}
 
 	if playerName != "" {
-		command, reason, err := s.autoActionService.DecideNextAction(playerName, s.statusMonitor)
+		command, reason, err := s.autoActionService.DecideNextAction(playerName, s.statusMonitor, client.DisableCures, client.PLSource, client.PLTarget)
 		if err != nil {
 			log.Printf("Decision tree error for %s: %v", playerName, err)
 		} else if command != nil {
@@ -857,34 +853,34 @@ func (s *Server) handleJSONChatMessage(client *Client, msg *protocol.Message) {
 		log.Printf("Chat triggers detected from %s (msg: %s): %v", chat.Sender, chat.Message, triggerEvents)
 
 		// Route trigger events to centralized casting system
-		s.triggerService.RouteTriggerEvents(triggerEvents, s.statusMonitor)
+		s.triggerService.RouteTriggerEvents(triggerEvents, s.statusMonitor, client.DisableCures, client.PLSource, client.PLTarget)
 	}
 
 	// Power Leveling Mode detection
 	// mode 13/14 are typically incoming tells
 	if (chat.Mode == 13 || chat.Mode == 14) && strings.Contains(strings.ToLower(chat.Message), "power level") {
 		// Only enable if both are connected (implied since we received the tell from sender and we are here)
-		s.PLSource = chat.Sender
-		s.PLTarget = client.playerName
-		log.Printf("POWER LEVELING MODE ENABLED: %s is power leveling %s", s.PLTarget, s.PLSource)
+		client.PLSource = chat.Sender
+		client.PLTarget = client.playerName
+		log.Printf("POWER LEVELING MODE ENABLED for %s: %s is power leveling %s", client.playerName, client.PLTarget, client.PLSource)
 	}
 
 	if strings.Contains(strings.ToLower(chat.Message), "stop pl") {
-		if chat.Sender == s.PLSource || chat.Sender == s.PLTarget {
-			s.PLSource = ""
-			s.PLTarget = ""
-			log.Printf("POWER LEVELING MODE DISABLED by %s", chat.Sender)
+		if chat.Sender == client.PLSource || chat.Sender == client.PLTarget {
+			client.PLSource = ""
+			client.PLTarget = ""
+			log.Printf("POWER LEVELING MODE DISABLED for %s by %s", client.playerName, chat.Sender)
 		}
 	}
 
 	if strings.Contains(strings.ToLower(chat.Message), "disable cures") {
-		s.DisableCures = true
-		log.Printf("CURES DISABLED by %s", chat.Sender)
+		client.DisableCures = true
+		log.Printf("CURES DISABLED for %s by %s", client.playerName, chat.Sender)
 	}
 
 	if strings.Contains(strings.ToLower(chat.Message), "enable cures") {
-		s.DisableCures = false
-		log.Printf("CURES ENABLED by %s", chat.Sender)
+		client.DisableCures = false
+		log.Printf("CURES ENABLED for %s by %s", client.playerName, chat.Sender)
 	}
 }
 
@@ -1117,6 +1113,18 @@ func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interfac
 				jobLevels[jobName] = 75 // Fallback if level not provided
 			}
 
+			// Add subjob if present
+			if subJob, ok := body["SubJob"].(float64); ok && subJob > 0 {
+				subJobName := getJobNameFromID(int(subJob))
+				subJobLevel := 0
+				if sjl, ok := body["SubJobLevel"].(float64); ok {
+					subJobLevel = int(sjl)
+				}
+				if subJobLevel > 0 {
+					jobLevels[subJobName] = subJobLevel
+				}
+			}
+
 			// Extract known spells and abilities if present
 			var knownSpells []string
 			if spells, ok := body["KnownSpells"].([]interface{}); ok {
@@ -1149,6 +1157,30 @@ func (s *Server) handleJSONStatusUpdate(client *Client, body map[string]interfac
 						// log.Printf("[DEBUG] Recast update for spell %d: %v remaining (ready at %v)", id, remaining, readyAt)
 					} else {
 						s.Player.SetSpellRecast(uint16(id), time.Time{}) // Clear it
+					}
+				}
+			}
+
+			// Handle AbilityRecasts if present
+			if recasts, ok := body["AbilityRecasts"].(map[string]interface{}); ok {
+				for idStr, remainingStr := range recasts {
+					id, err := strconv.ParseUint(idStr, 10, 16)
+					if err != nil {
+						continue
+					}
+					var remaining float64
+					switch v := remainingStr.(type) {
+					case string:
+						remaining, _ = strconv.ParseFloat(v, 64)
+					case float64:
+						remaining = v
+					}
+
+					if remaining > 0 {
+						readyAt := time.Now().Add(time.Duration(remaining * float64(time.Second)))
+						s.Player.SetAbilityRecast(uint16(id), readyAt)
+					} else {
+						s.Player.SetAbilityRecast(uint16(id), time.Time{})
 					}
 				}
 			}

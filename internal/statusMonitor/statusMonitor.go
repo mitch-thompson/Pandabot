@@ -358,7 +358,19 @@ func (sm *StatusMonitor) RegisterDesiredBuff(playerName string, statusID int, sp
 		return
 	}
 
+	// Try direct lookup first
 	member, exists := sm.partyMembers[targetName]
+	if !exists {
+		// Try case-insensitive lookup
+		for _, m := range sm.partyMembers {
+			if strings.EqualFold(m.Name, targetName) {
+				member = m
+				exists = true
+				break
+			}
+		}
+	}
+
 	if !exists {
 		return
 	}

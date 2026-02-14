@@ -27,6 +27,9 @@ type ClientInterface interface {
 	// WaitForReadyForAction blocks until the client signals it is ready for an action
 	WaitForReadyForAction(timeout time.Duration) error
 
+	// CanUseAbility checks if an ability is ready to be used
+	CanUseAbility(abilityName string) bool
+
 	// LockExecution locks the client for command execution (CheckReady + Send)
 	LockExecution()
 	// UnlockExecution unlocks the client

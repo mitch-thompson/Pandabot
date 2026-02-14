@@ -877,6 +877,8 @@ function send_status_update()
 				MPActual = party_mgr:GetMemberMP(i),
 				Job = party_mgr:GetMemberMainJob(i),
 				JobLevel = party_mgr:GetMemberMainJobLevel(i),
+				SubJob = party_mgr:GetMemberSubJob(i),
+				SubJobLevel = party_mgr:GetMemberSubJobLevel(i),
 				Zone = party_mgr:GetMemberZone(i),
 				StatusEffects = buffs_list  -- Sorted array of buff IDs
 			}

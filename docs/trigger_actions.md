@@ -54,6 +54,7 @@ These triggers cause the bot to use a Job Ability on the sender. These are one-t
 | `haste` | Casts Haste on the sender. |
 | `auspice` | Casts Auspice (self-targeted). |
 | `regen` | Casts the optimal Regen spell on the sender. |
+| `refresh` | Casts optimal Refresh on sender, or target (e.g., `refresh player`). Limited to party members. Recast when it falls off. |
 | `protect` | Casts the optimal Protect/Protectra spell. |
 | `shell` | Casts the optimal Shell/Shellra spell. |
 | `reraise` | Casts the optimal Reraise spell on the caster. |

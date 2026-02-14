@@ -30,7 +30,7 @@ func NewTriggerProcessor(engine Engine) *TriggerProcessor {
 }
 
 // ProcessTriggerEvent processes a trigger event and generates appropriate casting requests
-func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender string, priority int, casterName string, casterMP int, casterJobLevels map[string]int, partyMembers []*entity.Entity) ([]string, error) {
+func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender string, arg string, priority int, casterName string, casterMP int, casterJobLevels map[string]int, partyMembers []*entity.Entity) ([]string, error) {
 	var requestIDs []string
 
 	// Create casting context
@@ -145,6 +145,18 @@ func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender strin
 		seq++
 		if err != nil {
 			return nil, fmt.Errorf("failed to process shell trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, requestID)
+
+	case triggerType == "refresh":
+		target := sender
+		if arg != "" {
+			target = arg
+		}
+		requestID, err := tp.processRefreshTrigger(target, priority, context, getUniqueNano(seq))
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process refresh trigger: %v", err)
 		}
 		requestIDs = append(requestIDs, requestID)
 
@@ -289,8 +301,10 @@ func (tp *TriggerProcessor) processNaTrigger(spellName string, target string, pr
 	// Find the target entity to get their status effects
 	var targetEntity *entity.Entity
 	for _, member := range context.PartyMembers {
-		if member.Name == target {
+		if strings.EqualFold(member.Name, target) {
 			targetEntity = member
+			// Ensure we use the correct casing for the target name from the party list
+			target = member.Name
 			break
 		}
 	}
@@ -320,6 +334,23 @@ func (tp *TriggerProcessor) processNaTrigger(spellName string, target string, pr
 		return "", err
 	}
 
+	// Verify level requirement
+	hasLevel := false
+	if len(s.LevelReq) == 0 {
+		hasLevel = true
+	} else {
+		for job, reqLevel := range s.LevelReq {
+			if currentLevel, exists := context.CasterJobLevels[job]; exists && currentLevel >= reqLevel {
+				hasLevel = true
+				break
+			}
+		}
+	}
+
+	if !hasLevel {
+		return "", fmt.Errorf("caster does not meet level requirement for %s", spellName)
+	}
+
 	request := &CastRequest{
 		ID:       requestID,
 		Type:     CastTypeManual, // Use manual type with specific spell
@@ -342,8 +373,10 @@ func (tp *TriggerProcessor) processAbilityTrigger(abilityName string, target str
 	// Find the target entity
 	var targetEntity *entity.Entity
 	for _, member := range context.PartyMembers {
-		if member.Name == target {
+		if strings.EqualFold(member.Name, target) {
 			targetEntity = member
+			// Ensure we use the correct casing for the target name from the party list
+			target = member.Name
 			break
 		}
 	}
@@ -383,8 +416,10 @@ func (tp *TriggerProcessor) processCureTrigger(target string, priority int, cont
 	// Find the target entity to determine cure needs
 	var targetEntity *entity.Entity
 	for _, member := range context.PartyMembers {
-		if member.Name == target {
+		if strings.EqualFold(member.Name, target) {
 			targetEntity = member
+			// Ensure we use the correct casing for the target name from the party list
+			target = member.Name
 			break
 		}
 	}
@@ -526,6 +561,23 @@ func (tp *TriggerProcessor) castManualSpell(spellName string, target string, pri
 		return "", err
 	}
 
+	// Verify level requirement
+	hasLevel := false
+	if len(s.LevelReq) == 0 {
+		hasLevel = true
+	} else {
+		for job, reqLevel := range s.LevelReq {
+			if currentLevel, exists := context.CasterJobLevels[job]; exists && currentLevel >= reqLevel {
+				hasLevel = true
+				break
+			}
+		}
+	}
+
+	if !hasLevel {
+		return "", fmt.Errorf("caster does not meet level requirement for %s", spellName)
+	}
+
 	requestID := fmt.Sprintf("manual_%d", timestamp)
 	request := &CastRequest{
 		ID:       requestID,
@@ -539,6 +591,48 @@ func (tp *TriggerProcessor) castManualSpell(spellName string, target string, pri
 	err = tp.engine.RequestCast(request)
 	if err != nil {
 		return "", fmt.Errorf("failed to request manual spell cast: %v", err)
+	}
+
+	return requestID, nil
+}
+
+// processRefreshTrigger processes a refresh trigger
+func (tp *TriggerProcessor) processRefreshTrigger(target string, priority int, context *CastContext, timestamp int64) (string, error) {
+	// Find the target entity
+	var targetEntity *entity.Entity
+	for _, member := range context.PartyMembers {
+		if strings.EqualFold(member.Name, target) {
+			targetEntity = member
+			// Ensure we use the correct casing for the target name from the party list
+			target = member.Name
+			break
+		}
+	}
+
+	if targetEntity != nil {
+		context.TargetEntity = targetEntity
+	} else {
+		// Verify if target is p0-p5 if we can't find entity by name
+		// But usually partyMembers contains all of them.
+		// The requirement said Refresh can only be cast on party members (p0-p5).
+		// If we can't find them in PartyMembers, they might be alliance or not in party.
+		return "", fmt.Errorf("target %s not found in party", target)
+	}
+
+	// Create casting request for Refresh
+	requestID := fmt.Sprintf("refresh_%d", timestamp)
+
+	request := &CastRequest{
+		ID:       requestID,
+		Type:     CastTypeRefresh,
+		Target:   target,
+		Priority: priority,
+		Context:  context,
+	}
+
+	err := tp.engine.RequestCast(request)
+	if err != nil {
+		return "", fmt.Errorf("failed to request refresh cast: %v", err)
 	}
 
 	return requestID, nil

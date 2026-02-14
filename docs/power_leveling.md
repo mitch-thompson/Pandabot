@@ -23,18 +23,24 @@ Once activated:
 
 #### Technical Implementation
 -   **Detection:** The server monitors incoming tells (Mode 13/14) for the "power level" trigger in `internal/server/server.go`.
--   **State Management:** The server maintains `PLSource` and `PLTarget` fields.
--   **Action Logic:** In `internal/autoActionService/autoActionService.go`, the `DecideNextAction` function checks these fields:
-    -   If the requesting client is the `PLSource`, it returns no action.
+-   **State Management:** Each client (character) maintains its own `PLSource` and `PLTarget` fields. This allows multiple characters to power level different targets independently.
+-   **Action Logic:** In `internal/autoActionService/autoActionService.go`, the `DecideNextAction` function checks these fields for the specific client:
+    -   If the requesting client is the `PLSource`, it returns no action (unless cures are disabled, in which case it allows other actions).
     -   If the requesting client is the `PLTarget`, it retrieves the `StatusMonitor` from the `PLSource`'s client and merges their party members into the local healing consideration loop.
--   **Status Monitoring:** Each client now has its own `StatusMonitor` instance to accurately track its local party's state, which is shared via the server for PL mode.
+-   **Status Monitoring:** Each client has its own `StatusMonitor` instance to accurately track its local party's state, which is shared via the server for PL mode.
+
+#### Per-Character Control
+Both Power Leveling mode and Cure control are per-character. This means:
+- You can enable PL on one character while another character continues regular play.
+- You can "disable cures" on one character (e.g., your healer while you manually heal) without affecting other characters running PandaBot.
+- Commands like "enable cures", "disable cures", "power level", and "stop pl" only affect the specific character that receives or sends the message.
 
 #### Disable Cures Command
 To prevent a character from casting Cures or status removal ("-na") spells, use the following commands:
 -   **Disable Cures:** Send a chat message or tell containing "disable cures".
 -   **Enable Cures:** Send a chat message or tell containing "enable cures".
 
-When "Disable Cures" is active, the bot will skip all automatic Cure and status removal actions. 
+When "Disable Cures" is active, the bot will skip all automatic Cure and status removal actions for that specific character. 
 
 **Behavior in PL Mode:**
 - If "Disable Cures" is **NOT** active (default), the PL Source (person being leveled) will stop all automatic actions.

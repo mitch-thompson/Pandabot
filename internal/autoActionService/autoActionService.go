@@ -13,9 +13,6 @@ import (
 // AutoActionService handles automatic actions based on party status
 type AutoActionService struct {
 	castingSystem *casting.CastingServerIntegration
-	PLSource      *string
-	PLTarget      *string
-	DisableCures  *bool
 }
 
 // NewAutoActionService creates a new auto action service
@@ -26,35 +23,53 @@ func NewAutoActionService(castingSystem *casting.CastingServerIntegration) *Auto
 }
 
 // DecideNextAction determines the next action for a client based on the decision tree
-func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMonitor.StatusMonitor) (*protocol.ExecuteCommand, string, error) {
-	// 0. Power Leveling Mode logic
-	if aas.PLSource != nil && *aas.PLSource == playerName {
-		// In PL mode, the source player (being power leveled) should ideally only send data.
-		// If DisableCures is explicitly true, we definitely don't cast cures/na.
-		// If it's NOT true, we currently stop everything.
-		if aas.DisableCures == nil || !*aas.DisableCures {
-			return nil, "Power Leveling Mode: Source player is not casting", nil
+func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMonitor.StatusMonitor, disableCures bool, plSource string, plTarget string) (*protocol.ExecuteCommand, string, error) {
+	// 0. Silence Check - MUST be first to prevent any casting while silenced
+	isSilenced := false
+	for _, statusID := range sm.PlayerStatus {
+		if statusID == 6 || statusID == 10 { // Silence IDs
+			isSilenced = true
+			break
 		}
 	}
 
-	for _, statusID := range sm.PlayerStatus {
-		if statusID == 6 || statusID == 10 { // Silence IDs
-			if sm.EchoDropCount > 0 {
-				return &protocol.ExecuteCommand{
-					Command: "/item \"Echo Drops\" <me>",
-				}, "Silenced - Using Echo Drops", nil
+	// Double check party members for our own name in case PlayerStatus is out of sync
+	if !isSilenced {
+		if me, exists := sm.GetPartyMember(playerName); exists {
+			for _, statusID := range me.StatusIDs {
+				if statusID == 6 || statusID == 10 {
+					isSilenced = true
+					break
+				}
 			}
-			return nil, "Silenced - No Echo Drops", nil
 		}
 	}
+
+	if isSilenced {
+		if sm.EchoDropCount > 0 {
+			return &protocol.ExecuteCommand{
+				Command: "/item \"Echo Drops\" <me>",
+			}, "Silenced - Using Echo Drops", nil
+		}
+		return nil, "Silenced - No Echo Drops", nil
+	}
+
+	// 0.1. Power Leveling Mode logic
 
 	partyMap := sm.GetAllPartyMembers()
 
+	// If this is the PL source, return no action (unless cures are disabled)
+	if plSource == playerName && plTarget != "" {
+		if !disableCures {
+			return nil, "PL Source Mode: Automatic actions paused", nil
+		}
+	}
+
 	// If this is the PL target, consider the PL source's party members
 	isPL := false
-	if aas.PLTarget != nil && *aas.PLTarget == playerName && aas.PLSource != nil && *aas.PLSource != "" {
+	if plTarget == playerName && plSource != "" {
 		isPL = true
-		sourceClient := aas.findClientByName(*aas.PLSource)
+		sourceClient := aas.findClientByName(plSource)
 		if sourceClient != nil {
 			sourceSM := sourceClient.GetStatusMonitor()
 			if sourceSM != nil {
@@ -86,8 +101,28 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		}
 	}
 
+	// Red Mage Convert Logic
+	// If RDM > 40, MP < 10%, and Convert is ready, add to queue
+	if rdmLevel, ok := clientInfo.JobLevels["RDM"]; ok && rdmLevel >= 40 {
+		mpPercent := 100
+		if me, exists := sm.GetPartyMember(playerName); exists {
+			if me.MPMax > 0 {
+				mpPercent = (me.MPActual * 100) / me.MPMax
+			} else {
+				mpPercent = me.MPPercent
+			}
+		}
+
+		if mpPercent < 10 && client.CanUseAbility("Convert") {
+			return &protocol.ExecuteCommand{
+				Command:  "/ja \"Convert\" <me>",
+				Priority: 80, // High priority
+			}, "MP low (< 10%) - Using Convert", nil
+		}
+	}
+
 	criticalMembers := make([]*statusMonitor.PartyMember, 0)
-	if aas.DisableCures == nil || !*aas.DisableCures {
+	if !disableCures {
 		for _, member := range partyMap {
 			if sm.GetHealthThreshold(member.HPPercent) == "critical" {
 				criticalMembers = append(criticalMembers, member)
@@ -128,7 +163,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 	}
 
 	sleptMembers := make([]string, 0)
-	if aas.DisableCures == nil || !*aas.DisableCures {
+	if !disableCures {
 		for _, member := range partyMap {
 			for _, statusID := range member.StatusIDs {
 				if statusID == 2 {
@@ -149,7 +184,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		}, fmt.Sprintf("Waking up member: %s", sleptMembers[0]), nil
 	}
 
-	if aas.DisableCures == nil || !*aas.DisableCures {
+	if !disableCures {
 		for _, member := range partyMap {
 			effect := sm.GetMostSevereStatusEffect(member)
 			if effect != nil && effect.Severity >= 3 {
@@ -172,7 +207,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 
 	// 4. Mid priority cures? (Low threshold)
 	lowHPMembers := make([]*statusMonitor.PartyMember, 0)
-	if aas.DisableCures == nil || !*aas.DisableCures {
+	if !disableCures {
 		for _, member := range partyMap {
 			if sm.GetHealthThreshold(member.HPPercent) == "low" {
 				lowHPMembers = append(lowHPMembers, member)
@@ -210,47 +245,6 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 			return &protocol.ExecuteCommand{
 				Command: fmt.Sprintf("/ma \"%s\" %s", cureOption.SpellName, target),
 			}, fmt.Sprintf("Mid priority cure: %s on %s", cureOption.SpellName, target), nil
-		}
-	}
-
-	// 4.5 Sublimation logic (SCH only)
-	isSCH := clientInfo.JobLevels["SCH"] > 0
-	if isSCH {
-		hasRefresh := false
-		hasSubActivated := false
-		hasSubComplete := false
-		for _, id := range sm.PlayerStatus {
-			if id == 43 { // Refresh
-				hasRefresh = true
-			}
-			if id == 187 { // Sublimation: Activated
-				hasSubActivated = true
-			}
-			if id == 188 { // Sublimation: Complete
-				hasSubComplete = true
-			}
-		}
-
-		// - If we don't currently have refresh we should use sublimation (and it's not already active)
-		if !hasRefresh && !hasSubActivated && !hasSubComplete {
-			return &protocol.ExecuteCommand{
-				Command: "/ja \"Sublimation\" <me>",
-			}, "Sublimation: No Refresh", nil
-		}
-
-		// - When sublimation is full and we are missing mp we should use sublimation
-		if hasSubComplete && clientInfo.MP < 100 { // Heuristic: Missing some MP. ClientInfo doesn't have MaxMP currently.
-			return &protocol.ExecuteCommand{
-				Command: "/ja \"Sublimation\" <me>",
-			}, "Sublimation: Releasing full charge", nil
-		}
-
-		// - When we are less than 10% mp we should use sublimation if we have it up
-		// We don't have MPPercent in ClientInfo, but we can assume MP < 50-100 is low for a SCH
-		if clientInfo.MP < 50 && (hasSubActivated || hasSubComplete) {
-			return &protocol.ExecuteCommand{
-				Command: "/ja \"Sublimation\" <me>",
-			}, "Sublimation: Emergency MP recovery", nil
 		}
 	}
 
@@ -383,7 +377,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 	}
 
 	// 6. Low priority debuffs to remove? (Severity 2)
-	if aas.DisableCures == nil || !*aas.DisableCures {
+	if !disableCures {
 		for _, member := range partyMap {
 			effect := sm.GetMostSevereStatusEffect(member)
 			if effect != nil && effect.Severity == 2 {
