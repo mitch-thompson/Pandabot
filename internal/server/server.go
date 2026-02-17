@@ -751,6 +751,15 @@ func (s *Server) handleJSONActionFailed(client *Client, msg *protocol.Message) {
 
 // handleJSONReadyForAction processes a signal that the client is ready for a new action
 func (s *Server) handleJSONReadyForAction(client *Client, msg *protocol.Message) {
+	// Use mutex for thread-safe access to currentCommand
+	client.queueMutex.Lock()
+	if client.currentCommand != nil {
+		client.queueMutex.Unlock()
+		// log.Printf("Client %s is already executing a command, skipping decision tree", client.playerName)
+		return
+	}
+	client.queueMutex.Unlock()
+
 	// First notify the casting system (for potential pending manual requests)
 	s.castingSystem.HandleReadyForAction(client.conn)
 
@@ -778,13 +787,14 @@ func (s *Server) handleJSONReadyForAction(client *Client, msg *protocol.Message)
 			log.Printf("Decision tree for %s: %s (Reason: %s)", playerName, command.Command, reason)
 
 			// Wrap in JSON ExecuteCommand message
+			commandID := fmt.Sprintf("auto_%d", time.Now().UnixNano())
 			executeMsg := protocol.Message{
 				Type: protocol.TypeExecuteCommand,
 				Body: protocol.ExecuteCommand{
 					Command:   command.Command,
 					Target:    command.Target,
 					Priority:  command.Priority,
-					ID:        fmt.Sprintf("auto_%d", time.Now().UnixNano()),
+					ID:        commandID,
 					Timestamp: time.Now().Unix(),
 				},
 			}
@@ -798,6 +808,20 @@ func (s *Server) handleJSONReadyForAction(client *Client, msg *protocol.Message)
 			if err != nil {
 				log.Printf("Failed to marshal auto command: %v", err)
 			} else {
+				// Record this as the current command so we don't spam and can track completion
+				client.queueMutex.Lock()
+				now := time.Now()
+				client.currentCommand = &QueuedCommand{
+					ID:       commandID,
+					Command:  command.Command,
+					Target:   command.Target,
+					Priority: command.Priority,
+					State:    CommandInProgress,
+					QueuedAt: now,
+					SentAt:   &now,
+				}
+				client.queueMutex.Unlock()
+
 				s.sendMessageToClient(client, strings.TrimSpace(buf.String()))
 				return
 			}
@@ -858,15 +882,46 @@ func (s *Server) handleJSONChatMessage(client *Client, msg *protocol.Message) {
 
 	// Power Leveling Mode detection
 	// mode 13/14 are typically incoming tells
-	if (chat.Mode == 13 || chat.Mode == 14) && strings.Contains(strings.ToLower(chat.Message), "power level") {
-		// Only enable if both are connected (implied since we received the tell from sender and we are here)
-		client.PLSource = chat.Sender
-		client.PLTarget = client.playerName
-		log.Printf("POWER LEVELING MODE ENABLED for %s: %s is power leveling %s", client.playerName, client.PLTarget, client.PLSource)
+	// mode 12 is party chat
+	// some versions of Ashita/FFXI might use other modes for tells
+	isAllowedMode := chat.Mode == 13 || chat.Mode == 14 || chat.Mode == 3 || chat.Mode == 4 || chat.Mode == 12
+
+	if strings.Contains(strings.ToLower(chat.Message), "power level") {
+		// Log for debugging
+		log.Printf("[PL DEBUG] Power level command received. Mode: %d, Sender: %s, Message: %s", chat.Mode, chat.Sender, chat.Message)
+
+		if isAllowedMode {
+			// Only enable if both are connected (implied since we received the tell/message from sender and we are here)
+			// Use the effective sender from textParser if available
+			effectiveSender := chat.Sender
+
+			// If textParser extracted a sender (e.g. from a formatted string), use that
+			if len(triggerEvents) > 0 {
+				effectiveSender = triggerEvents[0].Sender
+			}
+
+			client.PLSource = effectiveSender
+			client.PLTarget = client.playerName
+			log.Printf("POWER LEVELING MODE ENABLED for %s: %s is power leveling %s", client.playerName, client.PLTarget, client.PLSource)
+		} else {
+			log.Printf("[PL DEBUG] Power level command ignored because mode %d is not a tell or party message", chat.Mode)
+		}
 	}
 
 	if strings.Contains(strings.ToLower(chat.Message), "stop pl") {
-		if chat.Sender == client.PLSource || chat.Sender == client.PLTarget {
+		// Try to match sender against PL source/target using case-insensitive comparison
+		// If textParser extracted a sender, we should check that too
+		matchFound := false
+		if strings.EqualFold(chat.Sender, client.PLSource) || strings.EqualFold(chat.Sender, client.PLTarget) {
+			matchFound = true
+		} else if len(triggerEvents) > 0 {
+			effectiveSender := triggerEvents[0].Sender
+			if strings.EqualFold(effectiveSender, client.PLSource) || strings.EqualFold(effectiveSender, client.PLTarget) {
+				matchFound = true
+			}
+		}
+
+		if matchFound {
 			client.PLSource = ""
 			client.PLTarget = ""
 			log.Printf("POWER LEVELING MODE DISABLED for %s by %s", client.playerName, chat.Sender)

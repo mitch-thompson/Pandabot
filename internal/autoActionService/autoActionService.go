@@ -3,6 +3,7 @@ package autoActionService
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"PandaBot/internal/casting"
 	"PandaBot/internal/entity"
@@ -59,7 +60,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 	partyMap := sm.GetAllPartyMembers()
 
 	// If this is the PL source, return no action (unless cures are disabled)
-	if plSource == playerName && plTarget != "" {
+	if plSource != "" && plTarget != "" && strings.EqualFold(plSource, playerName) {
 		if !disableCures {
 			return nil, "PL Source Mode: Automatic actions paused", nil
 		}
@@ -67,7 +68,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 
 	// If this is the PL target, consider the PL source's party members
 	isPL := false
-	if plTarget == playerName && plSource != "" {
+	if plTarget != "" && plSource != "" && strings.EqualFold(plTarget, playerName) {
 		isPL = true
 		sourceClient := aas.findClientByName(plSource)
 		if sourceClient != nil {
@@ -85,6 +86,8 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 	}
 
 	partyEntities := buildPartyEntitiesFromMap(partyMap)
+
+	p := aas.castingSystem.GetCastingEngine().Player
 
 	client := aas.findClientByName(playerName)
 	if client == nil {
@@ -146,6 +149,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		}
 
 		cureOption, err := aas.castingSystem.GetCastingEngine().SelectOptimalCure(&casting.CastContext{
+			Player:          p,
 			MissingHP:       missingHP,
 			CasterMP:        clientInfo.MP,
 			CasterJobLevels: clientInfo.JobLevels,
@@ -174,7 +178,12 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		}
 	}
 
-	if len(sleptMembers) > 1 && !isPL {
+	if len(sleptMembers) > 1 {
+		if isPL {
+			return &protocol.ExecuteCommand{
+				Command: fmt.Sprintf("/ma \"Cure\" %s", sleptMembers[0]),
+			}, fmt.Sprintf("Waking up multiple members (Curaga disabled in PL): %v", sleptMembers), nil
+		}
 		return &protocol.ExecuteCommand{
 			Command: fmt.Sprintf("/ma \"Curaga\" %s", sleptMembers[0]),
 		}, fmt.Sprintf("Waking up multiple members: %v", sleptMembers), nil
@@ -190,6 +199,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 			if effect != nil && effect.Severity >= 3 {
 				spellName := effect.NaSpell
 				if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaAction(&casting.CastContext{
+					Player:          p,
 					CasterMP:        clientInfo.MP,
 					CasterJobLevels: clientInfo.JobLevels,
 					StatusEffects:   member.StatusIDs,
@@ -232,6 +242,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		}
 
 		cureOption, err := aas.castingSystem.GetCastingEngine().SelectOptimalCure(&casting.CastContext{
+			Player:          p,
 			MissingHP:       missingHP,
 			CasterMP:        clientInfo.MP,
 			CasterJobLevels: clientInfo.JobLevels,
@@ -268,6 +279,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 				}
 			} else if spellName == "protect" {
 				if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalProtect(&casting.CastContext{
+					Player:          p,
 					CasterMP:        clientInfo.MP,
 					CasterJobLevels: clientInfo.JobLevels,
 					PartySize:       sm.GetPartyCount(),
@@ -277,6 +289,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 				}
 			} else if spellName == "shell" {
 				if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalShell(&casting.CastContext{
+					Player:          p,
 					CasterMP:        clientInfo.MP,
 					CasterJobLevels: clientInfo.JobLevels,
 					PartySize:       sm.GetPartyCount(),
@@ -288,6 +301,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 
 			// Check if this spell is TargetSelf
 			if resolvedTarget, err := aas.castingSystem.GetCastingEngine().ResolveActionTarget(spellName, member.Name, &casting.CastContext{
+				Player:          p,
 				CasterName:      playerName,
 				IsPowerleveling: isPL,
 			}); err == nil && (resolvedTarget == playerName || resolvedTarget == "<me>") {
@@ -345,6 +359,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 			}
 		} else if spellName == "protect" {
 			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalProtect(&casting.CastContext{
+				Player:          p,
 				CasterMP:        clientInfo.MP,
 				CasterJobLevels: clientInfo.JobLevels,
 				PartySize:       sm.GetPartyCount(),
@@ -354,6 +369,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 			}
 		} else if spellName == "shell" {
 			if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalShell(&casting.CastContext{
+				Player:          p,
 				CasterMP:        clientInfo.MP,
 				CasterJobLevels: clientInfo.JobLevels,
 				PartySize:       sm.GetPartyCount(),
@@ -365,6 +381,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 
 		// Re-resolve target based on the final spell name (handles TargetSelf, etc.)
 		if resolvedTarget, err := aas.castingSystem.GetCastingEngine().ResolveActionTarget(spellName, target, &casting.CastContext{
+			Player:          p,
 			CasterName:      "<me>", // autoActionService always assumes caster is <me> for command generation
 			IsPowerleveling: isPL,
 		}); err == nil {
@@ -383,6 +400,7 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 			if effect != nil && effect.Severity == 2 {
 				spellName := effect.NaSpell
 				if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaAction(&casting.CastContext{
+					Player:          p,
 					CasterMP:        clientInfo.MP,
 					CasterJobLevels: clientInfo.JobLevels,
 					StatusEffects:   member.StatusIDs,
@@ -404,7 +422,7 @@ func (aas *AutoActionService) findClientByName(name string) casting.ClientInterf
 	clients := aas.castingSystem.GetClientManager().GetConnectedClients()
 	for _, client := range clients {
 		info := client.GetClientInfo()
-		if info != nil && info.PlayerName == name {
+		if info != nil && strings.EqualFold(info.PlayerName, name) {
 			return client
 		}
 	}

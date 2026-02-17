@@ -3,10 +3,12 @@
 Power Leveling (PL) Mode allows one player's bot to automatically monitor and heal another player's party. This is particularly useful when you have a high-level character (the PL target/healer) assisting a lower-level character (the PL source).
 
 #### Activation
-To activate PL mode, the player who wants to be power-leveled (PL source) must send a tell to the player who will be doing the healing (PL target) containing the phrase "power level".
+To activate PL mode, the player who wants to be power-leveled (PL source) must send a tell or a party chat message to the player who will be doing the healing (PL target) containing the phrase "power level".
 
 **Example:**
 `/tell Kiro power level`
+or
+`/p power level`
 
 #### Deactivation
 To deactivate PL mode, either the PL source or the PL target can send a tell or a chat message containing "stop pl".
@@ -19,10 +21,10 @@ Both players must have PandaBot connected to the same server for this to functio
 #### Behavior
 Once activated:
 1.  **PL Source (Sender):** The bot will stop selecting and executing any automatic actions (spells, abilities, items). This ensures the character doesn't perform actions that might interfere with the PL process or draw unwanted attention.
-2.  **PL Target (Healer):** The bot will continue its normal operations but will also monitor the status of all members in the PL source's party. It will prioritize cures and status removals for the PL source's party members as if they were in its own party.
+2.  **PL Target (Healer):** The bot will continue its normal operations but will also monitor the status of all members in the PL source's party. It will prioritize cures and status removals for the PL source's party members as if they were in its own party. **In this mode, the bot will never cast Curaga spells, even if multiple party members are injured, to avoid drawing unnecessary enmity/aggro.** For more technical details on this implementation, see [Power Leveling Implementation](developer/power_leveling_implementation.md).
 
 #### Technical Implementation
--   **Detection:** The server monitors incoming tells (Mode 13/14) for the "power level" trigger in `internal/server/server.go`.
+-   **Detection:** The server monitors incoming tells (Mode 13/14/3/4) and party chat (Mode 12) for the "power level" trigger in `internal/server/server.go`.
 -   **State Management:** Each client (character) maintains its own `PLSource` and `PLTarget` fields. This allows multiple characters to power level different targets independently.
 -   **Action Logic:** In `internal/autoActionService/autoActionService.go`, the `DecideNextAction` function checks these fields for the specific client:
     -   If the requesting client is the `PLSource`, it returns no action (unless cures are disabled, in which case it allows other actions).

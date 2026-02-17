@@ -475,7 +475,7 @@ func (csi *CastingServerIntegration) GetTriggerProcessor() *TriggerProcessor {
 }
 
 // ProcessTriggerEvent processes a trigger event using the centralized casting system
-func (csi *CastingServerIntegration) ProcessTriggerEvent(triggerType string, sender string, arg string, priority int, partyMembers []*entity.Entity) []string {
+func (csi *CastingServerIntegration) ProcessTriggerEvent(triggerType string, sender string, arg string, priority int, partyMembers []*entity.Entity, isPowerleveling bool) []string {
 	// Get a connected client to determine available MP and job levels
 	connectedClients := csi.clientManager.GetConnectedClients()
 	if len(connectedClients) == 0 {
@@ -495,8 +495,8 @@ func (csi *CastingServerIntegration) ProcessTriggerEvent(triggerType string, sen
 		return nil
 	}
 
-	log.Printf("[SERVER DEBUG] ProcessTriggerEvent: triggerType=%s, clientInfo.PlayerName=%s, clientInfo.MP=%d, clientInfo.JobLevels=%v",
-		triggerType, clientInfo.PlayerName, clientInfo.MP, clientInfo.JobLevels)
+	log.Printf("[SERVER DEBUG] ProcessTriggerEvent: triggerType=%s, clientInfo.PlayerName=%s, clientInfo.MP=%d, clientInfo.JobLevels=%v, isPL=%v",
+		triggerType, clientInfo.PlayerName, clientInfo.MP, clientInfo.JobLevels, isPowerleveling)
 
 	// Process the trigger event through the centralized trigger processor
 	requestIDs, err := csi.triggerProcessor.ProcessTriggerEvent(
@@ -508,6 +508,7 @@ func (csi *CastingServerIntegration) ProcessTriggerEvent(triggerType string, sen
 		clientInfo.MP,
 		clientInfo.JobLevels,
 		partyMembers,
+		isPowerleveling,
 	)
 
 	if err != nil {

@@ -24,7 +24,7 @@ func NewCastingHelper(engine *CastingEngine, clientManager *ClientManager) *Cast
 }
 
 // CastCure casts an optimal cure spell on a target
-func (ch *CastingHelper) CastCure(target string, targetEntity *entity.Entity, casterMP int, jobLevels map[string]int, priority int) (string, error) {
+func (ch *CastingHelper) CastCure(target string, targetEntity *entity.Entity, casterMP int, jobLevels map[string]int, priority int, isPowerleveling bool) (string, error) {
 	requestID := fmt.Sprintf("cure_%d", time.Now().UnixNano())
 
 	// Get caster name from connected clients
@@ -36,11 +36,12 @@ func (ch *CastingHelper) CastCure(target string, targetEntity *entity.Entity, ca
 		Target:   target,
 		Priority: priority,
 		Context: &CastContext{
+			Player:          ch.engine.Player,
 			CasterMP:        casterMP,
 			CasterJobLevels: jobLevels,
 			CasterName:      casterName,
 			TargetEntity:    targetEntity,
-			IsPowerleveling: ch.engine.config.IsPowerleveling,
+			IsPowerleveling: isPowerleveling,
 		},
 	}
 
@@ -54,7 +55,7 @@ func (ch *CastingHelper) CastCure(target string, targetEntity *entity.Entity, ca
 // CastCureByDamage casts an optimal cure spell based on missing HP
 // partyMembers is optional but recommended; when provided, the engine can
 // evaluate Curaga efficiency across the group.
-func (ch *CastingHelper) CastCureByDamage(target string, missingHP int, casterMP int, jobLevels map[string]int, priority int, partyMembers []*entity.Entity) (string, error) {
+func (ch *CastingHelper) CastCureByDamage(target string, missingHP int, casterMP int, jobLevels map[string]int, priority int, partyMembers []*entity.Entity, isPowerleveling bool) (string, error) {
 	requestID := fmt.Sprintf("cure_dmg_%d", time.Now().UnixNano())
 
 	// Get caster name from connected clients
@@ -66,13 +67,14 @@ func (ch *CastingHelper) CastCureByDamage(target string, missingHP int, casterMP
 		Target:   target,
 		Priority: priority,
 		Context: &CastContext{
+			Player:          ch.engine.Player,
 			CasterMP:        casterMP,
 			CasterJobLevels: jobLevels,
 			CasterName:      casterName,
 			MissingHP:       missingHP,
 			PartyMembers:    partyMembers,
 			PartySize:       len(partyMembers),
-			IsPowerleveling: ch.engine.config.IsPowerleveling,
+			IsPowerleveling: isPowerleveling,
 		},
 	}
 
@@ -84,7 +86,7 @@ func (ch *CastingHelper) CastCureByDamage(target string, missingHP int, casterMP
 }
 
 // CastBuffs casts optimal buff spells for a given buff type
-func (ch *CastingHelper) CastBuffs(target string, buffType string, casterMP int, jobLevels map[string]int, partySize int, priority int) (string, error) {
+func (ch *CastingHelper) CastBuffs(target string, buffType string, casterMP int, jobLevels map[string]int, partySize int, priority int, isPowerleveling bool) (string, error) {
 	requestID := fmt.Sprintf("buff_%s_%d", buffType, time.Now().UnixNano())
 
 	// Get caster name from connected clients
@@ -96,12 +98,13 @@ func (ch *CastingHelper) CastBuffs(target string, buffType string, casterMP int,
 		Target:   target,
 		Priority: priority,
 		Context: &CastContext{
+			Player:          ch.engine.Player,
 			CasterMP:        casterMP,
 			CasterJobLevels: jobLevels,
 			CasterName:      casterName,
 			PartySize:       partySize,
 			BuffType:        buffType,
-			IsPowerleveling: ch.engine.config.IsPowerleveling,
+			IsPowerleveling: isPowerleveling,
 		},
 	}
 
@@ -113,7 +116,7 @@ func (ch *CastingHelper) CastBuffs(target string, buffType string, casterMP int,
 }
 
 // CastNaSpell casts optimal "na" spell for status effects
-func (ch *CastingHelper) CastNaSpell(target string, statusEffects []int, casterMP int, jobLevels map[string]int, priority int) (string, error) {
+func (ch *CastingHelper) CastNaSpell(target string, statusEffects []int, casterMP int, jobLevels map[string]int, priority int, isPowerleveling bool) (string, error) {
 	requestID := fmt.Sprintf("na_%d", time.Now().UnixNano())
 
 	// Get caster name from connected clients
@@ -125,11 +128,12 @@ func (ch *CastingHelper) CastNaSpell(target string, statusEffects []int, casterM
 		Target:   target,
 		Priority: priority,
 		Context: &CastContext{
+			Player:          ch.engine.Player,
 			CasterMP:        casterMP,
 			CasterJobLevels: jobLevels,
 			CasterName:      casterName,
 			StatusEffects:   statusEffects,
-			IsPowerleveling: ch.engine.config.IsPowerleveling,
+			IsPowerleveling: isPowerleveling,
 		},
 	}
 
@@ -161,6 +165,7 @@ func (ch *CastingHelper) CastSpell(spellName string, target string, priority int
 		Priority: priority,
 		Timeout:  timeout,
 		Context: &CastContext{
+			Player:          ch.engine.Player,
 			CasterName:      casterName,
 			CasterMP:        casterMP,
 			CasterJobLevels: jobLevels,
@@ -240,24 +245,24 @@ func (ch *CastingHelper) CastWithCallback(spellName string, target string, prior
 // Emergency casting methods with high priority
 
 // EmergencyCure casts an emergency cure with maximum priority
-func (ch *CastingHelper) EmergencyCure(target string, targetEntity *entity.Entity, casterMP int, jobLevels map[string]int) (string, error) {
-	return ch.CastCure(target, targetEntity, casterMP, jobLevels, 10) // Maximum priority
+func (ch *CastingHelper) EmergencyCure(target string, targetEntity *entity.Entity, casterMP int, jobLevels map[string]int, isPowerleveling bool) (string, error) {
+	return ch.CastCure(target, targetEntity, casterMP, jobLevels, 10, isPowerleveling) // Maximum priority
 }
 
 // EmergencyNa casts an emergency "na" spell with high priority
-func (ch *CastingHelper) EmergencyNa(target string, statusEffects []int, casterMP int, jobLevels map[string]int) (string, error) {
-	return ch.CastNaSpell(target, statusEffects, casterMP, jobLevels, 9) // High priority
+func (ch *CastingHelper) EmergencyNa(target string, statusEffects []int, casterMP int, jobLevels map[string]int, isPowerleveling bool) (string, error) {
+	return ch.CastNaSpell(target, statusEffects, casterMP, jobLevels, 9, isPowerleveling) // High priority
 }
 
 // Batch operations
 
 // CastPartyBuffs casts buffs on all party members
-func (ch *CastingHelper) CastPartyBuffs(partyMembers []*entity.Entity, buffType string, casterMP int, jobLevels map[string]int, priority int) ([]string, error) {
+func (ch *CastingHelper) CastPartyBuffs(partyMembers []*entity.Entity, buffType string, casterMP int, jobLevels map[string]int, priority int, isPowerleveling bool) ([]string, error) {
 	var requestIDs []string
 	var errors []error
 
 	for _, member := range partyMembers {
-		requestID, err := ch.CastBuffs(member.Name, buffType, casterMP, jobLevels, len(partyMembers), priority)
+		requestID, err := ch.CastBuffs(member.Name, buffType, casterMP, jobLevels, len(partyMembers), priority, isPowerleveling)
 		if err != nil {
 			errors = append(errors, fmt.Errorf("failed to cast buff on %s: %v", member.Name, err))
 			continue
@@ -273,7 +278,7 @@ func (ch *CastingHelper) CastPartyBuffs(partyMembers []*entity.Entity, buffType 
 }
 
 // CastPartyCures casts cures on party members who need healing
-func (ch *CastingHelper) CastPartyCures(partyMembers []*entity.Entity, casterMP int, jobLevels map[string]int, hpThreshold int, priority int) ([]string, error) {
+func (ch *CastingHelper) CastPartyCures(partyMembers []*entity.Entity, casterMP int, jobLevels map[string]int, hpThreshold int, priority int, isPowerleveling bool) ([]string, error) {
 	var requestIDs []string
 	var errors []error
 
@@ -297,7 +302,7 @@ func (ch *CastingHelper) CastPartyCures(partyMembers []*entity.Entity, casterMP 
 		}
 
 		selector := cureSelector.NewCureSelector()
-		useCuraga, curagaOption, err := selector.ShouldUseCuraga(injured, availableMP, jobLevels, ch.engine.Player, ch.engine.config.IsPowerleveling)
+		useCuraga, curagaOption, err := selector.ShouldUseCuraga(injured, availableMP, jobLevels, ch.engine.Player, isPowerleveling)
 		if err == nil && useCuraga && curagaOption != nil {
 			// Cast curaga on the caster (self-target spell)
 			casterName := ch.getCasterName()
@@ -318,7 +323,7 @@ func (ch *CastingHelper) CastPartyCures(partyMembers []*entity.Entity, casterMP 
 
 	// Fall back: cast individual cures on injured members
 	for _, member := range injured {
-		requestID, err := ch.CastCure(member.Name, member, casterMP, jobLevels, priority)
+		requestID, err := ch.CastCure(member.Name, member, casterMP, jobLevels, priority, isPowerleveling)
 		if err != nil {
 			errors = append(errors, fmt.Errorf("failed to cast cure on %s: %v", member.Name, err))
 			continue
@@ -350,6 +355,7 @@ func (ch *CastingHelper) UseEchoDrop(priority int) (string, error) {
 		Target:   "<me>",
 		Priority: priority,
 		Context: &CastContext{
+			Player:     ch.engine.Player,
 			CasterName: ch.getCasterName(),
 		},
 	}

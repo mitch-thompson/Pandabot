@@ -83,9 +83,6 @@ func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []
 	// Get available single-target cure options
 	availableCureOptions := cs.getAvailableCureOptions(availableMP, jobLevel, p, isPowerleveling)
 
-	// Get available Curaga options
-	availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel, p, isPowerleveling)
-
 	var bestOption *CureOption
 	maxWeightedEfficiency := -1.0
 
@@ -106,6 +103,7 @@ func (cs *CureSelector) SelectOptimalCure(target *entity.Entity, partyMembers []
 
 	// Evaluate Curaga options
 	if !isPowerleveling && len(partyMembers) >= cs.config.CuragaThreshold {
+		availableCuragaOptions := cs.getAvailableCuragaOptions(availableMP, jobLevel, p, isPowerleveling)
 		for _, option := range availableCuragaOptions {
 			totalEffectiveHeal := 0.0
 			for _, member := range partyMembers {
@@ -236,6 +234,9 @@ func (cs *CureSelector) GetAllCureOptions(availableMP int, jobLevel map[string]i
 
 // SelectCuragaForMultipleTargets selects appropriate curaga spell when more than 3 party members need healing
 func (cs *CureSelector) SelectCuragaForMultipleTargets(partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int, p *player.Player, isPowerleveling bool) (*CureOption, error) {
+	if isPowerleveling {
+		return nil, fmt.Errorf("curaga is disabled during power leveling")
+	}
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -270,6 +271,9 @@ func (cs *CureSelector) SelectCuragaForMultipleTargets(partyMembers []*entity.En
 
 // ShouldUseCuraga determines if curaga is more efficient than individual cures
 func (cs *CureSelector) ShouldUseCuraga(partyMembers []*entity.Entity, availableMP int, jobLevel map[string]int, p *player.Player, isPowerleveling bool) (bool, *CureOption, error) {
+	if isPowerleveling {
+		return false, nil, nil
+	}
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -464,6 +468,9 @@ func (cs *CureSelector) getAvailableCureOptions(availableMP int, jobLevel map[st
 }
 
 func (cs *CureSelector) getAvailableCuragaOptions(availableMP int, jobLevel map[string]int, p *player.Player, isPowerleveling bool) []*CureOption {
+	if isPowerleveling {
+		return nil
+	}
 	var options []*CureOption
 
 	maxTier := 0

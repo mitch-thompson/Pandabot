@@ -64,6 +64,7 @@ The following thresholds can be adjusted in `config.toml`:
 Some logic uses hardcoded values for safety and stability:
 
 - **Significant Damage (Curaga)**: A member only counts towards the `curaga_threshold_count` if they are missing more than **50 HP** OR more than **15%** of their Max HP (`internal/cureSelector/cureSelector.go`).
+- **Power Leveling Mode**: When Power Leveling (PL) mode is active, Curaga spells are completely disabled to prevent the healer from drawing excessive enmity from multiple targets. The bot will use individual Cure spells instead. See [Power Leveling Implementation](developer/power_leveling_implementation.md) for developer documentation.
 - **Emergency Mode**: In emergency mode, the system favors spells that cover at least **80%** of missing HP (`internal/cureSelector/cureSelector.go`).
 - **Efficiency Bonus**: A 1.5x appropriateness bonus is applied if a spell covers **70-120%** of missing HP (`internal/cureSelector/cureSelector.go`).
 

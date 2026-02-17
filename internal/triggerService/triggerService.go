@@ -34,7 +34,12 @@ func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerE
 	// Convert to entity format for casting system
 	entityMembers := ts.entityService.ConvertPartyMembersToEntities(partyMembers)
 
-	// Process each trigger event through centralized casting system
+	// Determine if PL mode is active for trigger processing
+	isPL := false
+	if plTarget != "" && plSource != "" {
+		isPL = true
+	}
+
 	for _, triggerEvent := range triggerEvents {
 		// Handle "panda" and "panda clear" control triggers
 		if triggerEvent.TriggerType == "panda" || triggerEvent.TriggerType == "panda clear" {
@@ -126,6 +131,7 @@ func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerE
 			triggerEvent.Arg,
 			triggerEvent.Priority,
 			entityMembers,
+			isPL,
 		)
 
 		if len(requestIDs) > 0 {

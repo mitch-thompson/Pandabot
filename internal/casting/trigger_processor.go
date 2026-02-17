@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"PandaBot/internal/entity"
+	"PandaBot/internal/player"
 	"PandaBot/internal/registry"
 )
 
@@ -15,6 +16,7 @@ var globalRequestSeq uint64
 
 type Engine interface {
 	RequestCast(request *CastRequest) error
+	GetPlayer() *player.Player
 }
 
 // TriggerProcessor handles processing of trigger events and converts them to casting requests
@@ -30,16 +32,18 @@ func NewTriggerProcessor(engine Engine) *TriggerProcessor {
 }
 
 // ProcessTriggerEvent processes a trigger event and generates appropriate casting requests
-func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender string, arg string, priority int, casterName string, casterMP int, casterJobLevels map[string]int, partyMembers []*entity.Entity) ([]string, error) {
+func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender string, arg string, priority int, casterName string, casterMP int, casterJobLevels map[string]int, partyMembers []*entity.Entity, isPowerleveling bool) ([]string, error) {
 	var requestIDs []string
 
 	// Create casting context
 	context := &CastContext{
+		Player:          tp.engine.GetPlayer(),
 		CasterMP:        casterMP,
 		CasterJobLevels: casterJobLevels,
 		CasterName:      casterName,
 		PartyMembers:    partyMembers,
 		PartySize:       len(partyMembers),
+		IsPowerleveling: isPowerleveling,
 	}
 
 	// Use a base timestamp for all requests in this call, but we'll add a sequence number to ensure uniqueness

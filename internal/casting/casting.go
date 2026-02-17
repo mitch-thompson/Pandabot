@@ -1172,6 +1172,15 @@ func (ce *CastingEngine) SelectOptimalRefresh(jobLevels map[string]int, availabl
 	return ce.buffSelector.SelectOptimalRefresh(jobLevels, availableMP, p)
 }
 
+func (ce *CastingEngine) GetCastingEngine() *CastingEngine {
+	return ce
+}
+
+// GetPlayer returns the player object for recast checks
+func (ce *CastingEngine) GetPlayer() *player.Player {
+	return ce.Player
+}
+
 func (ce *CastingEngine) GetStats() map[string]interface{} {
 	ce.mu.RLock()
 	defer ce.mu.RUnlock()
