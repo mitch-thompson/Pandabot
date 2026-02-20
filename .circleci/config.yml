@@ -56,11 +56,13 @@ jobs:
           name: Package for Windows
           command: |
             cd dist
-            zip -r pandabot-windows-amd64.zip pandabot.exe addon/
+            zip -j pandabot-windows-amd64.zip pandabot.exe addon/pandabot.lua
       - persist_to_workspace:
           root: dist
           paths:
             - pandabot-windows-amd64.zip
+      - store_artifacts:
+          path: dist/pandabot-windows-amd64.zip
 
   publish-github:
     docker:
