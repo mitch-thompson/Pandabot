@@ -160,8 +160,18 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		})
 
 		if err == nil {
+			// Resolve target based on spell targeting flags
+			spellTarget := target
+			if resolved, err := aas.castingSystem.GetCastingEngine().ResolveActionTarget(cureOption.SpellName, target, &casting.CastContext{
+				Player:          p,
+				CasterName:      playerName,
+				IsPowerleveling: isPL,
+			}); err == nil {
+				spellTarget = resolved
+			}
+
 			return &protocol.ExecuteCommand{
-				Command: fmt.Sprintf("/ma \"%s\" %s", cureOption.SpellName, target),
+				Command: fmt.Sprintf("/ma \"%s\" %s", cureOption.SpellName, spellTarget),
 			}, fmt.Sprintf("Critical Cure: %s on %s", cureOption.SpellName, target), nil
 		}
 	}
@@ -197,6 +207,9 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		for _, member := range partyMap {
 			effect := sm.GetMostSevereStatusEffect(member)
 			if effect != nil && effect.Severity >= 3 {
+				if isPL {
+					continue
+				}
 				spellName := effect.NaSpell
 				if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaAction(&casting.CastContext{
 					Player:          p,
@@ -208,8 +221,18 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 					spellName = opt.GetName()
 				}
 
+				// Resolve target based on spell targeting flags
+				spellTarget := member.Name
+				if resolved, err := aas.castingSystem.GetCastingEngine().ResolveActionTarget(spellName, member.Name, &casting.CastContext{
+					Player:          p,
+					CasterName:      playerName,
+					IsPowerleveling: isPL,
+				}); err == nil {
+					spellTarget = resolved
+				}
+
 				return &protocol.ExecuteCommand{
-					Command: fmt.Sprintf("/ma \"%s\" %s", spellName, member.Name),
+					Command: fmt.Sprintf("/ma \"%s\" %s", spellName, spellTarget),
 				}, fmt.Sprintf("High priority debuff: %s on %s", effect.Name, member.Name), nil
 			}
 		}
@@ -253,8 +276,18 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		})
 
 		if err == nil {
+			// Resolve target based on spell targeting flags
+			spellTarget := target
+			if resolved, err := aas.castingSystem.GetCastingEngine().ResolveActionTarget(cureOption.SpellName, target, &casting.CastContext{
+				Player:          p,
+				CasterName:      playerName,
+				IsPowerleveling: isPL,
+			}); err == nil {
+				spellTarget = resolved
+			}
+
 			return &protocol.ExecuteCommand{
-				Command: fmt.Sprintf("/ma \"%s\" %s", cureOption.SpellName, target),
+				Command: fmt.Sprintf("/ma \"%s\" %s", cureOption.SpellName, spellTarget),
 			}, fmt.Sprintf("Mid priority cure: %s on %s", cureOption.SpellName, target), nil
 		}
 	}
@@ -398,6 +431,9 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		for _, member := range partyMap {
 			effect := sm.GetMostSevereStatusEffect(member)
 			if effect != nil && effect.Severity == 2 {
+				if isPL {
+					continue
+				}
 				spellName := effect.NaSpell
 				if opt, err := aas.castingSystem.GetCastingEngine().SelectOptimalNaAction(&casting.CastContext{
 					Player:          p,
@@ -408,8 +444,19 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 				}); err == nil && opt != nil {
 					spellName = opt.GetName()
 				}
+
+				// Resolve target based on spell targeting flags
+				spellTarget := member.Name
+				if resolved, err := aas.castingSystem.GetCastingEngine().ResolveActionTarget(spellName, member.Name, &casting.CastContext{
+					Player:          p,
+					CasterName:      playerName,
+					IsPowerleveling: isPL,
+				}); err == nil {
+					spellTarget = resolved
+				}
+
 				return &protocol.ExecuteCommand{
-					Command: fmt.Sprintf("/ma \"%s\" %s", spellName, member.Name),
+					Command: fmt.Sprintf("/ma \"%s\" %s", spellName, spellTarget),
 				}, fmt.Sprintf("Low priority debuff: %s on %s", effect.Name, member.Name), nil
 			}
 		}

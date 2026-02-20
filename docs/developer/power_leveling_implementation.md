@@ -1,6 +1,6 @@
 ### Power Leveling (PL) Mode Implementation
 
-This document describes the technical implementation of Power Leveling (PL) mode, specifically how Curaga spells are disabled to manage enmity.
+This document describes the technical implementation of Power Leveling (PL) mode, specifically how Curaga spells, 'na spells, and Erase are disabled to manage enmity and focus resources.
 
 #### Core State: `isPowerleveling`
 
@@ -35,7 +35,7 @@ When a player sends a tell (e.g., "heal"), the flow is:
 The `internal/casting/convenience.go` package provides helper methods like `CastCure`, `CastBuffs`, and `CastPartyCures`. All these methods have been updated to accept an `isPowerleveling bool` parameter, ensuring that manual or programmatic calls also respect the mode.
 
 #### 3. Enforcement Logic
-The actual blocking of Curaga spells happens in the `cureSelector` and `CastingEngine`.
+The actual blocking of Curaga, 'na spells, and Erase happens in the `cureSelector` and `CastingEngine`.
 
 - **`internal/cureSelector/cureSelector.go`**:
     - `getAvailableCuragaOptions`: Returns `nil` immediately if `isPowerleveling` is true.
@@ -46,6 +46,10 @@ The actual blocking of Curaga spells happens in the `cureSelector` and `CastingE
 - **`internal/casting/casting.go`**:
     - The `CastContext` struct holds the `IsPowerleveling` flag.
     - `selectOptimalCure` and `selectOptimalBuffs` pass this flag down to their respective selectors.
+    - `selectOptimalNaSpell`: Returns an error immediately if `IsPowerleveling` is true, effectively disabling all 'na spells (Poisona, Paralyna, etc.) and Erase.
+
+- **`internal/autoActionService/autoActionService.go`**:
+    - `DecideNextAction`: Explicitly skips status effect removal loops if `isPowerleveling` is true to avoid unnecessary processing and log spam.
 
 #### 4. Summary of Key Methods
 

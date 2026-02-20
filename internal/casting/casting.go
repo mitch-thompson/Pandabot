@@ -721,6 +721,10 @@ func (ce *CastingEngine) isEquivalentSpell(spell1, spell2 string) bool {
 
 // selectOptimalNaSpell selects the best "na" spell for the context
 func (ce *CastingEngine) selectOptimalNaSpell(context *CastContext) (action.Actionable, error) {
+	if context.IsPowerleveling {
+		return nil, fmt.Errorf("na spells and erase are disabled in powerleveling mode")
+	}
+
 	availableMP := context.CasterMP - ce.config.MPReservation
 	if availableMP <= 0 {
 		return nil, fmt.Errorf("insufficient MP for na spell")
