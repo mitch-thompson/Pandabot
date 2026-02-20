@@ -75,7 +75,3 @@ Detailed documentation for specific features can be found in the `docs/` folder:
 ### Development
 
 For information on the internal architecture and contributing, see [flow.md](flow.md).
-
-### License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
