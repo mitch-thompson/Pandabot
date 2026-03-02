@@ -10,17 +10,18 @@ import (
 type MessageType uint8
 
 const (
-	TypePing           MessageType = 1
-	TypePong           MessageType = 2
-	TypeExecuteCommand MessageType = 10 // Go -> Ashita
-	TypeChatLine       MessageType = 20 // Ashita -> Go (parsed chat)
-	TypeStatusUpdate   MessageType = 21 // Ashita -> Go (party status)
-	TypeErrorReport    MessageType = 30 // Ashita -> Go (command execution errors)
-	TypeActionComplete MessageType = 31 // Ashita -> Go (action completion notification)
-	TypeActionFailed   MessageType = 32 // Ashita -> Go (action failure notification)
-	TypeReadyToCast    MessageType = 40 // Go -> Ashita (check if ready)
-	TypeReadyResponse  MessageType = 41 // Ashita -> Go (ready status)
-	TypeReadyForAction MessageType = 42 // Ashita -> Go (client is ready for next action)
+	TypePing            MessageType = 1
+	TypePong            MessageType = 2
+	TypeExecuteCommand  MessageType = 10 // Go -> Ashita
+	TypeChatLine        MessageType = 20 // Ashita -> Go (parsed chat)
+	TypeStatusUpdate    MessageType = 21 // Ashita -> Go (party status)
+	TypeErrorReport     MessageType = 30 // Ashita -> Go (command execution errors)
+	TypeActionComplete  MessageType = 31 // Ashita -> Go (action completion notification)
+	TypeActionFailed    MessageType = 32 // Ashita -> Go (action failure notification)
+	TypeReadyToCast     MessageType = 40 // Go -> Ashita (check if ready)
+	TypeReadyResponse   MessageType = 41 // Ashita -> Go (ready status)
+	TypeReadyForAction  MessageType = 42 // Ashita -> Go (client is ready for next action)
+	TypeStratagemUpdate MessageType = 50 // Ashita -> Go (stratagem recast info)
 )
 
 type ReadyForAction struct {
@@ -108,6 +109,13 @@ type ActionFailed struct {
 	CommandID string `json:"command_id"`
 	Error     string `json:"error"`
 	Timestamp int64  `json:"timestamp"`
+}
+
+// StratagemUpdate represents stratagem recast information from client to server
+type StratagemUpdate struct {
+	Timer     int   `json:"timer"` // Stratagem recast timer in seconds
+	Level     int   `json:"level"` // SCH job level
+	Timestamp int64 `json:"timestamp"`
 }
 
 // Validation functions

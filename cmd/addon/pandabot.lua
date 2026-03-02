@@ -494,6 +494,10 @@ ashita.events.register('packet_in', 'pandabot_packet', function(e)
 					current_action.id = nil
 					current_action.is_casting = false
 				end
+				-- Send stratagem update after any ability use (category 8)
+				if category == 8 then
+					ashita.tasks.once(1.0, function() send_stratagem_update() end)
+				end
 			elseif category == 11 then
 			-- Action failed / interrupted
 				if current_action.id then
@@ -1202,6 +1206,44 @@ function send_spell_completion(command_id)
 	current_action.is_casting = false
 	current_action.id = nil
 	send_ready_for_action()
+end
+
+function send_stratagem_update()
+	if not connected then return end
+
+	local recast_mgr = AshitaCore:GetMemoryManager():GetRecast()
+	if not recast_mgr then return end
+
+	local player_mgr = AshitaCore:GetMemoryManager():GetPlayer()
+	if not player_mgr then return end
+
+	local sch_level = 0
+	if player_mgr:GetMainJob() == 20 then
+		sch_level = player_mgr:GetMainJobLevel()
+	elseif player_mgr:GetSubJob() == 20 then
+		sch_level = player_mgr:GetSubJobLevel()
+	end
+
+	if sch_level < 10 then return end
+
+	local strat_timer = 0
+	for i = 0, 31 do
+		if recast_mgr:GetAbilityTimerId(i) == 231 then
+			strat_timer = recast_mgr:GetAbilityTimer(i)
+			break
+		end
+	end
+
+	local msg = {
+		type = 50,
+		body = {
+			timer = strat_timer,
+			level = sch_level,
+			timestamp = os.time()
+		}
+	}
+	send(msg)
+	debug_log(string.format('Sent stratagem update: timer=%d, level=%d', strat_timer, sch_level))
 end
 
 ----------------------------------------------------------------------------------------------------

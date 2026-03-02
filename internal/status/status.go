@@ -51,4 +51,6 @@ var Registry = map[int]StatusInfo{
 	359: {ID: 359, Name: "Dark Arts", Severity: 1, NaSpell: "Dark Arts", IsBuff: true},
 	417: {ID: 417, Name: "Afflatus Solace", Severity: 1, NaSpell: "Afflatus Solace", IsBuff: true},
 	418: {ID: 418, Name: "Afflatus Misery", Severity: 1, NaSpell: "Afflatus Misery", IsBuff: true},
+	399: {ID: 399, Name: "Accession", Severity: 1, NaSpell: "Accession", IsBuff: true},
+	401: {ID: 401, Name: "Addendum: White", Severity: 1, NaSpell: "Addendum: White", IsBuff: true},
 }

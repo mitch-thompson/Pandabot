@@ -181,6 +181,22 @@ func (tp *TriggerProcessor) ProcessTriggerEvent(triggerType string, sender strin
 		}
 		requestIDs = append(requestIDs, requestID)
 
+	case triggerType == "schprep":
+		log.Printf("Schprep received from %s", sender)
+		id := fmt.Sprintf("schprep_%d", getUniqueNano(seq))
+		err := tp.engine.RequestCast(&CastRequest{
+			ID:       id,
+			Type:     CastTypeSchPrep,
+			Target:   sender,
+			Priority: priority,
+			Context:  context,
+		})
+		seq++
+		if err != nil {
+			return nil, fmt.Errorf("failed to process schprep trigger: %v", err)
+		}
+		requestIDs = append(requestIDs, id)
+
 	case triggerType == "auspice":
 		requestID, err := tp.castManualSpell("Auspice", casterName, priority, context, getUniqueNano(seq))
 		seq++

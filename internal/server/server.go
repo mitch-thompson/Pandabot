@@ -630,6 +630,9 @@ func (s *Server) processJSONMessage(client *Client, messageStr string) {
 	case protocol.TypeReadyForAction:
 		s.handleJSONReadyForAction(client, &msg)
 
+	case protocol.TypeStratagemUpdate:
+		s.handleJSONStratagemUpdate(client, &msg)
+
 	case protocol.TypeErrorReport:
 		s.handleJSONErrorReport(client, &msg)
 
@@ -849,6 +852,25 @@ func (s *Server) handleJSONReadyResponse(client *Client, msg *protocol.Message) 
 
 	// Notify centralized casting system
 	s.castingSystem.HandleReadyResponse(client.conn, &resp)
+}
+
+// handleJSONStratagemUpdate processes a stratagem recast update from the client
+func (s *Server) handleJSONStratagemUpdate(client *Client, msg *protocol.Message) {
+	bodyBytes, err := json.Marshal(msg.Body)
+	if err != nil {
+		log.Printf("Failed to marshal stratagem update body: %v", err)
+		return
+	}
+
+	var update protocol.StratagemUpdate
+	if err := json.Unmarshal(bodyBytes, &update); err != nil {
+		log.Printf("Failed to unmarshal stratagem update: %v", err)
+		return
+	}
+
+	s.statusMonitor.UpdateStratagems(update.Timer, update.Level)
+	log.Printf("Stratagem update: timer=%d, level=%d, available=%d/%d",
+		update.Timer, update.Level, s.statusMonitor.GetStratagemCount(), s.statusMonitor.StratagemMax)
 }
 
 // handleJSONChatMessage processes a JSON chat message
@@ -1295,7 +1317,6 @@ func (s *Server) queueCommandForClient(client *Client, command string, target st
 		Command:  command,
 		Target:   target,
 		Priority: priority,
-		Timeout:  30 * time.Second, // Default timeout
 		State:    CommandQueued,
 		QueuedAt: now,
 	}

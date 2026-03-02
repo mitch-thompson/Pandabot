@@ -98,7 +98,15 @@ func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerE
 			} else if triggerEvent.TriggerType == "refresh" {
 				priority = 60
 			}
-			sm.RegisterDesiredBuff(target, statusID, triggerEvent.TriggerType, priority, time.Time{})
+			// Ability-based buffs use /ja instead of /ma
+			switch triggerEvent.TriggerType {
+			case "light arts", "lightarts", "dark arts", "darkarts",
+				"afflatus solace", "solace", "afflatus misery", "misery",
+				"addendum: white", "addendum white":
+				sm.RegisterDesiredAbilityBuff(target, statusID, triggerEvent.TriggerType, priority, time.Time{})
+			default:
+				sm.RegisterDesiredBuff(target, statusID, triggerEvent.TriggerType, priority, time.Time{})
+			}
 		}
 
 		// Special handling for elemental buff sequences (firebuffs, etc.)
@@ -119,7 +127,7 @@ func (ts *TriggerService) RouteTriggerEvents(triggerEvents []textParser.TriggerE
 			// If it's a WHM-enabled buff sequence, also register WHM prep buffs
 			// These are always self-buffs, so they should target the sender (who requested the buffs)
 			// autoActionService will handle redirecting these to <me> for monitoring.
-			sm.RegisterDesiredBuff(triggerEvent.Sender, 358, "Light Arts", 80, time.Time{})
+			sm.RegisterDesiredAbilityBuff(triggerEvent.Sender, 358, "Light Arts", 80, time.Time{})
 			sm.RegisterDesiredBuff(triggerEvent.Sender, 417, "Afflatus Solace", 80, time.Time{})
 			sm.RegisterDesiredBuff(triggerEvent.Sender, 113, "reraise", 90, time.Time{})
 			sm.RegisterDesiredBuff(triggerEvent.Sender, 272, "Auspice", 75, time.Time{})

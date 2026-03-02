@@ -17,6 +17,9 @@ type StatusMonitor struct {
 	PlayerName       string
 	PlayerStatus     []int
 	EchoDropCount    int
+	StratagemCount   int       // Current number of available stratagems
+	StratagemMax     int       // Maximum stratagems based on SCH level
+	StratagemUpdated time.Time // When stratagem info was last updated
 }
 
 // PartyMember represents a party member's current state
@@ -44,6 +47,7 @@ type DesiredBuff struct {
 	SpellName string
 	Priority  int
 	Expiry    time.Time
+	IsAbility bool // True if this buff is activated via /ja instead of /ma
 }
 
 // HealthThresholds defines when healing is needed
@@ -347,8 +351,17 @@ func (sm *StatusMonitor) CleanupStaleMembers(maxAge time.Duration) int {
 	return removed
 }
 
-// RegisterDesiredBuff adds a buff that should be monitored for a player
+// RegisterDesiredAbilityBuff adds a job ability buff that should be monitored for a player.
+func (sm *StatusMonitor) RegisterDesiredAbilityBuff(playerName string, statusID int, abilityName string, priority int, expiry time.Time) {
+	sm.registerDesiredBuffInternal(playerName, statusID, abilityName, priority, expiry, true)
+}
+
+// RegisterDesiredBuff adds a spell buff that should be monitored for a player.
 func (sm *StatusMonitor) RegisterDesiredBuff(playerName string, statusID int, spellName string, priority int, expiry time.Time) {
+	sm.registerDesiredBuffInternal(playerName, statusID, spellName, priority, expiry, false)
+}
+
+func (sm *StatusMonitor) registerDesiredBuffInternal(playerName string, statusID int, spellName string, priority int, expiry time.Time, isAbility bool) {
 	targetName := playerName
 	if targetName == "<me>" {
 		targetName = sm.PlayerName
@@ -378,6 +391,7 @@ func (sm *StatusMonitor) RegisterDesiredBuff(playerName string, statusID int, sp
 		SpellName: spellName,
 		Priority:  priority,
 		Expiry:    expiry,
+		IsAbility: isAbility,
 	}
 }
 
@@ -415,6 +429,38 @@ func (sm *StatusMonitor) ClearDesiredBuffByStatusID(statusID int) {
 	for _, member := range sm.partyMembers {
 		delete(member.DesiredBuffs, statusID)
 	}
+}
+
+// UpdateStratagems calculates and stores the current stratagem count from recast timer and SCH level.
+func (sm *StatusMonitor) UpdateStratagems(timer int, schLevel int) {
+	maxCharges := 0
+	switch {
+	case schLevel >= 90:
+		maxCharges = 5
+	case schLevel >= 70:
+		maxCharges = 4
+	case schLevel >= 50:
+		maxCharges = 3
+	case schLevel >= 30:
+		maxCharges = 2
+	case schLevel >= 10:
+		maxCharges = 1
+	}
+	sm.StratagemMax = maxCharges
+
+	if timer <= 0 {
+		sm.StratagemCount = maxCharges
+	} else {
+		// Each charge recharges every 240 seconds (4 minutes)
+		chargesOnCooldown := (timer + 239) / 240
+		sm.StratagemCount = max(maxCharges-chargesOnCooldown, 0)
+	}
+	sm.StratagemUpdated = time.Now()
+}
+
+// GetStratagemCount returns the current number of available stratagems.
+func (sm *StatusMonitor) GetStratagemCount() int {
+	return sm.StratagemCount
 }
 
 // GetPartyCount returns the number of tracked party members

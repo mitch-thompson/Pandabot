@@ -4,11 +4,15 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"PandaBot/internal/casting"
+	"PandaBot/internal/cureSelector"
 	"PandaBot/internal/entity"
+	"PandaBot/internal/player"
 	"PandaBot/internal/protocol"
 	"PandaBot/internal/statusMonitor"
+	"PandaBot/internal/zone"
 )
 
 // AutoActionService handles automatic actions based on party status
@@ -160,6 +164,13 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		})
 
 		if err == nil {
+			// SCH Accession: replace Curaga with Accession + single-target Cure
+			if strings.HasPrefix(cureOption.SpellName, "Curaga") {
+				if cmd, reason := aas.handleAccessionCure(sm, client, playerName, cureOption, target, p, clientInfo, isPL); cmd != nil {
+					return cmd, "Critical " + reason, nil
+				}
+			}
+
 			// Resolve target based on spell targeting flags
 			spellTarget := target
 			if resolved, err := aas.castingSystem.GetCastingEngine().ResolveActionTarget(cureOption.SpellName, target, &casting.CastContext{
@@ -276,6 +287,13 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 		})
 
 		if err == nil {
+			// SCH Accession: replace Curaga with Accession + single-target Cure
+			if strings.HasPrefix(cureOption.SpellName, "Curaga") {
+				if cmd, reason := aas.handleAccessionCure(sm, client, playerName, cureOption, target, p, clientInfo, isPL); cmd != nil {
+					return cmd, reason, nil
+				}
+			}
+
 			// Resolve target based on spell targeting flags
 			spellTarget := target
 			if resolved, err := aas.castingSystem.GetCastingEngine().ResolveActionTarget(cureOption.SpellName, target, &casting.CastContext{
@@ -289,6 +307,96 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 			return &protocol.ExecuteCommand{
 				Command: fmt.Sprintf("/ma \"%s\" %s", cureOption.SpellName, spellTarget),
 			}, fmt.Sprintf("Mid priority cure: %s on %s", cureOption.SpellName, target), nil
+		}
+	}
+
+	// 4.5. Auto-register Light Arts and Addendum: White for SCH players not in town
+	if schLevel, ok := clientInfo.JobLevels["SCH"]; ok && schLevel >= 10 {
+		if me, exists := sm.GetPartyMember(playerName); exists {
+			zoneStr := fmt.Sprintf("Zone_%d", me.Zone)
+			if !zone.IsRestricted(zoneStr) {
+				// Check if Light Arts or Addendum: White is active
+				hasLightArts := false
+				hasAddendumWhite := false
+				for _, sid := range me.StatusIDs {
+					if sid == 358 {
+						hasLightArts = true
+					}
+					if sid == 401 {
+						hasAddendumWhite = true
+					}
+				}
+				// Register Light Arts as a desired ability buff if neither Light Arts nor Addendum: White is active
+				if !hasLightArts && !hasAddendumWhite {
+					if _, hasBuff := me.DesiredBuffs[358]; !hasBuff {
+						sm.RegisterDesiredAbilityBuff(playerName, 358, "Light Arts", 80, time.Time{})
+					}
+				}
+				// Register Addendum: White if SCH >= 30 and Light Arts (or Addendum: White) is active
+				if schLevel >= 30 {
+					if hasLightArts || hasAddendumWhite {
+						if _, hasBuff := me.DesiredBuffs[401]; !hasBuff {
+							sm.RegisterDesiredAbilityBuff(playerName, 401, "Addendum: White", 79, time.Time{})
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 4.6. Sublimation handling for SCH players
+	if schLevel, ok := clientInfo.JobLevels["SCH"]; ok && schLevel >= 10 {
+		if me, exists := sm.GetPartyMember(playerName); exists {
+			zoneStr := fmt.Sprintf("Zone_%d", me.Zone)
+			if !zone.IsRestricted(zoneStr) {
+				hasSublimationActivated := false
+				hasSublimationComplete := false
+				for _, sid := range me.StatusIDs {
+					if sid == 187 {
+						hasSublimationActivated = true
+					}
+					if sid == 188 {
+						hasSublimationComplete = true
+					}
+				}
+
+				mpPercent := 100
+				if me.MPMax > 0 {
+					mpPercent = (me.MPActual * 100) / me.MPMax
+				} else {
+					mpPercent = me.MPPercent
+				}
+
+				// Use Sublimation to recover MP if complete and <50% MP, or activated and <20% MP
+				if hasSublimationComplete && mpPercent < 50 {
+					if client.CanUseAbility("Sublimation") {
+						return &protocol.ExecuteCommand{
+							Command:  "/ja \"Sublimation\" <me>",
+							Priority: 85,
+						}, "Sublimation Complete - Recovering MP (< 50%)", nil
+					}
+					return nil, "Sublimation Complete but ability not ready", nil
+				}
+				if hasSublimationActivated && mpPercent < 20 {
+					if client.CanUseAbility("Sublimation") {
+						return &protocol.ExecuteCommand{
+							Command:  "/ja \"Sublimation\" <me>",
+							Priority: 85,
+						}, "Sublimation Activated - Recovering MP (< 20%)", nil
+					}
+					return nil, "Sublimation Activated but ability not ready", nil
+				}
+
+				// Activate Sublimation if neither status is present
+				if !hasSublimationActivated && !hasSublimationComplete {
+					if client.CanUseAbility("Sublimation") {
+						return &protocol.ExecuteCommand{
+							Command:  "/ja \"Sublimation\" <me>",
+							Priority: 30,
+						}, "Activating Sublimation", nil
+					}
+				}
+			}
 		}
 	}
 
@@ -352,6 +460,9 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 			// We need to check if the player HAS ANY Reraise status, not just the base ID.
 			isReraiseBuff := (id == 113 || id == 129 || id == 141)
 
+			// SPECIAL CASE: Light Arts (358) is implicitly active when Addendum: White (401) is up
+			isLightArtsBuff := (id == 358)
+
 			hasBuff := false
 			for _, currentID := range monitoredMember.StatusIDs {
 				if currentID == id {
@@ -360,6 +471,11 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 				}
 				// If we are looking for reraise and have ANY reraise, it counts
 				if isReraiseBuff && (currentID == 113 || currentID == 129 || currentID == 141) {
+					hasBuff = true
+					break
+				}
+				// If we are looking for Light Arts and have Addendum: White, Light Arts is implicitly active
+				if isLightArtsBuff && currentID == 401 {
 					hasBuff = true
 					break
 				}
@@ -421,6 +537,18 @@ func (aas *AutoActionService) DecideNextAction(playerName string, sm *statusMoni
 			target = resolvedTarget
 		}
 
+		// Use /ja for ability buffs, /ma for spell buffs
+		if topBuff.buff.IsAbility {
+			if client.CanUseAbility(spellName) {
+				return &protocol.ExecuteCommand{
+					Command:  fmt.Sprintf("/ja \"%s\" <me>", spellName),
+					Priority: topBuff.buff.Priority,
+				}, fmt.Sprintf("Using ability: %s", spellName), nil
+			}
+			// Ability not ready, skip to next action
+			return nil, fmt.Sprintf("Ability %s not ready", spellName), nil
+		}
+
 		return &protocol.ExecuteCommand{
 			Command: fmt.Sprintf("/ma \"%s\" %s", spellName, target),
 		}, fmt.Sprintf("Buffing: %s on %s", spellName, target), nil
@@ -479,6 +607,76 @@ func (aas *AutoActionService) findClientByName(name string) casting.ClientInterf
 // ProcessAutomaticActions is now deprecated in favor of DecideNextAction called from the server
 func (aas *AutoActionService) ProcessAutomaticActions(statusMonitor *statusMonitor.StatusMonitor) {
 	// No-op, functionality moved to DecideNextAction
+}
+
+// curagaToSingleCure maps Curaga spell names to their single-target Cure equivalents.
+var curagaToSingleCure = map[string]string{
+	"Curaga":     "Cure II",
+	"Curaga II":  "Cure III",
+	"Curaga III": "Cure IV",
+	"Curaga IV":  "Cure V",
+	"Curaga V":   "Cure VI",
+}
+
+// handleAccessionCure checks if SCH can use Accession to turn a single-target cure into AoE,
+// replacing curaga. Returns a command and reason if handled, or nil if curaga should proceed normally.
+func (aas *AutoActionService) handleAccessionCure(
+	sm *statusMonitor.StatusMonitor,
+	client casting.ClientInterface,
+	playerName string,
+	cureOption *cureSelector.CureOption,
+	target string,
+	p *player.Player,
+	clientInfo *casting.ClientInfo,
+	isPL bool,
+) (*protocol.ExecuteCommand, string) {
+	if _, ok := clientInfo.JobLevels["SCH"]; !ok {
+		return nil, ""
+	}
+	if sm.GetStratagemCount() < 2 {
+		return nil, ""
+	}
+
+	me, exists := sm.GetPartyMember(playerName)
+	if !exists {
+		return nil, ""
+	}
+
+	hasAccession := false
+	for _, sid := range me.StatusIDs {
+		if sid == 399 {
+			hasAccession = true
+			break
+		}
+	}
+
+	if !hasAccession {
+		if client.CanUseAbility("Accession") {
+			return &protocol.ExecuteCommand{
+				Command:  "/ja \"Accession\" <me>",
+				Priority: 90,
+			}, "SCH Accession (preparing AoE cure)"
+		}
+		return nil, ""
+	}
+
+	cureName, ok := curagaToSingleCure[cureOption.SpellName]
+	if !ok {
+		cureName = "Cure"
+	}
+
+	spellTarget := target
+	if resolved, err := aas.castingSystem.GetCastingEngine().ResolveActionTarget(cureName, target, &casting.CastContext{
+		Player:          p,
+		CasterName:      playerName,
+		IsPowerleveling: isPL,
+	}); err == nil {
+		spellTarget = resolved
+	}
+
+	return &protocol.ExecuteCommand{
+		Command: fmt.Sprintf("/ma \"%s\" %s", cureName, spellTarget),
+	}, fmt.Sprintf("SCH Accession Cure: %s on %s (AoE via Accession)", cureName, spellTarget)
 }
 
 // buildPartyEntitiesFromMap converts a map of party members into entity.Entity list (Main Party only)

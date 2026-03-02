@@ -78,6 +78,7 @@ const (
 	CastTypeReraise                  // Auto-selected Reraise action
 	CastTypeRegen                    // Auto-selected Regen action
 	CastTypeRefresh                  // Auto-selected Refresh action
+	CastTypeSchPrep                  // SCH preparation sequence (Accession + Regen)
 )
 
 // CastContext provides context for spell selection and casting
@@ -482,6 +483,40 @@ func (ce *CastingEngine) resolveActionSelection(activeCast *ActiveCast) error {
 			activeCast.ActionsInSequence = whmSequence
 			activeCast.CurrentActionIndex = 0
 			request.Action = whmSequence[0]
+		}
+
+	case CastTypeSchPrep:
+		schSequence := []action.Actionable{}
+
+		// Check if Accession is available (SCH 10+)
+		if level, exists := context.CasterJobLevels["SCH"]; exists && level >= 10 {
+			// Check if Accession is ready
+			if a, err := registry.GetAbility("Accession"); err == nil {
+				if context.Player == nil || context.Player.CanUseAbility("Accession") {
+					schSequence = append(schSequence, a)
+				}
+			}
+		}
+
+		// Always add optimal Regen
+		regenOption, err := ce.buffSelector.SelectOptimalRegen(context.CasterJobLevels, context.CasterMP, context.Player)
+		if err == nil {
+			if s, err := registry.GetSpell(regenOption.SpellName); err == nil {
+				schSequence = append(schSequence, s)
+			}
+		}
+
+		if len(schSequence) == 0 {
+			return fmt.Errorf("no SCH prep actions available")
+		}
+
+		if len(schSequence) == 1 {
+			request.Action = schSequence[0]
+		} else {
+			request.Type = CastTypeSequence
+			activeCast.ActionsInSequence = schSequence
+			activeCast.CurrentActionIndex = 0
+			request.Action = schSequence[0]
 		}
 
 	default:
@@ -1062,6 +1097,8 @@ func (ce *CastingEngine) castTypeToString(castType CastType) string {
 		return "SHELL"
 	case CastTypeItem:
 		return "ITEM"
+	case CastTypeSchPrep:
+		return "SCHPREP"
 	default:
 		return fmt.Sprintf("UNKNOWN(%d)", int(castType))
 	}
